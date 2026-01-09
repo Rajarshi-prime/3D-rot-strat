@@ -1,5 +1,4 @@
 # Codes for dimensional Rotating stratified code.
----
 * Contains for GPU and MPI parallelized CPU turbulence.
 * Incorporates both 2/3rd and Phase-shifted dealiasing. 
 * Forces the balanced and the unbalanced flows separately. 
