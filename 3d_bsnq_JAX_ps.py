@@ -304,7 +304,7 @@ def RHS(uk, bk,visc = 1,forc = 1,isexplicit = isexplicit,invlap = invlap,fvec = 
 
     rhsk += 0.5*rfft(np.einsum('ijk,j...,k...->i...', epsilon, u,omg ))*conjphase_k[None,...]
 
-    rhsbk = 0.5*(-1j*np.einsum('i...,i...->...',kvec,rfft(u*irfft(bk*phase_k)[None,...])*conjphase_k[None,...]))
+    rhsbk += 0.5*(-1j*np.einsum('i...,i...->...',kvec,rfft(u*irfft(bk*phase_k)[None,...])*conjphase_k[None,...]))
 
 
     rhsk +=   (N_bvec[:,None,None,None]*bk[None, ...] + fk)*dealias[None,...]
