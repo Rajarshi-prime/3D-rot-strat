@@ -6,11 +6,12 @@ import numpy as np
 from scipy.fft import fft ,  ifft ,  irfft2 ,  rfft2 , irfftn ,  rfftn,   rfft,  irfft,fftfreq
 from mpi4py import MPI
 from time import time
-import pathlib,sys
+import pathlib,sys,h5py
 curr_path = pathlib.Path(__file__).parent
 forcestart = True
 omg_save = False
-idx = int(float(sys.argv[-1]))
+# idx = int(float(sys.argv[-1]))
+idx = 1
 # forcestart = bool(float(sys.argv[-1]))
 #%%
 
@@ -35,7 +36,7 @@ dt = 0.256/N   #! Such that increasing resolution will decrease the dt
 f_corr = 1.0
 N_bs = [15,20]
 N_b = N_bs[idx]
-T = 1000 if not omg_save else 31.4/f_corr
+T = 100 if not omg_save else 31.4/f_corr
 dt_save = 1.0 if not omg_save else 0.1/f_corr
 st = round(dt_save/dt)
 
@@ -73,10 +74,14 @@ if rank ==0 : print(kx_diff.shape, ky_diff.shape, kz_diff.shape)
 #%%
 
 ## ----------- Parameters ----------
-lp = 4 # Hyperviscosity power
+lp = int(float(sys.argv[-1])) # Hyperviscosity power
 nu0 = 0.5 #! Viscosity for N = 1
-m = 1.5 #! Desired kmax*eta
-nu = nu0*(3*m/(N*2**0.5))**(2*(lp - 1/3))  #? scaling with resolution. For 512, nu = 0.002 #! Need to add scaling for hyperviscosity
+# m = 1.5 #! Desired kmax*eta
+# nu = nu0*(3*m/(N*2**0.5))**(2*(lp - 1/3))  #? scaling with resolution. For 512, nu = 0.002 #! Need to add scaling for hyperviscosity
+m = 100 # Dissipation strength at the highest kmax. 
+nu = m/(2**0.5*N/3)**lp # Because boussinesq does not follow Kolmogorov scaling.
+
+
 
 fbyN = f_corr/N_b if N_b != 0 else 0.0
 einit = 0.0*TWO_PI**3 # Initial energy
@@ -544,8 +549,19 @@ def save(i,uk,bk):
     # np.savez_compressed(f"{new_dir}/Fields_{rank}",u = u[0],v = u[1],w = u[2])
     
     np.savez_compressed(f"{new_dir}/Fields_k_{rank}",uk = uk[0],vk = uk[1],wk = uk[2],bk = bk)
-    np.savez_compressed(f"{new_dir}/Energy_spectrum",ek = ek_arr)
-    np.savez_compressed(f"{new_dir}/Flux_spectrum",Pik = Pik_arr)
+    if rank ==0: 
+        with h5py.File(new_dir/'spectra_flux.hdf5', 'a') as f:
+            if 'Energy_Spectra' not in f:
+                f.create_group('Energy_Spectra')
+            if 'Flux_Spectra' not in f:
+                f.create_group('Flux_Spectra')
+            try: f[f"Energy_Spectra/time_{t[i]:.3f}"][...] = ek_arr
+            except KeyError: f[f"Energy_Spectra/time_{t[i]:.3f}"] = ek_arr
+            try : f[f"Flux_Spectra/time_{t[i]:.3f}"][...]=  Pik_arr
+            except KeyError: f[f"Flux_Spectra/time_{t[i]:.3f}"]=  Pik_arr
+            
+    # np.savez_compressed(f"{new_dir}/Energy_spectrum",ek = ek_arr)
+    # np.savez_compressed(f"{new_dir}/Flux_spectrum",Pik = Pik_arr)
     
     
     # u_temp = rfftn(u, axes = (-2,-1))[...,cond_ky, :N//3+1] #! Will only save the values in x k_x and k_y plane for the dealiased mode. 
