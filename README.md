@@ -1,0 +1,1 @@
+# Raw version of the rot-strat
