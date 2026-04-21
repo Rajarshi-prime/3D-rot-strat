@@ -75,23 +75,23 @@ if rank ==0 : print(kx_diff.shape, ky_diff.shape, kz_diff.shape)
 
 ## ----------- Parameters ----------
 lp = int(float(sys.argv[-1])) # Hyperviscosity power
-nu0 = 0.5 #! Viscosity for N = 1
+nu0 = 0.59 #! Viscosity for N = 1
 # m = 1.5 #! Desired kmax*eta
 # nu = nu0*(3*m/(N*2**0.5))**(2*(lp - 1/3))  #? scaling with resolution. For 512, nu = 0.002 #! Need to add scaling for hyperviscosity
-m = 100 # Dissipation strength at the highest kmax. 
-nu = m/(2**0.5*N/3)**lp # Because boussinesq does not follow Kolmogorov scaling.
+m = 15 # Dissipation strength at the highest kmax. 
+nu = m/(2**0.5*N//3)**lp # Because boussinesq does not follow Kolmogorov scaling.
 
 
 
 fbyN = f_corr/N_b if N_b != 0 else 0.0
 einit = 0.0*TWO_PI**3 # Initial energy
-nshells = 2 # Number of consecutive shells to be forced
-shell_no = np.arange(4,4+nshells) # the shells to be forced 
+nshells = 1 # Number of consecutive shells to be forced
+#shell_no = np.arange(4,4+nshells) # the shells to be forced 
 #%%
 
 #----  Kolmogorov length scale - \eta \epsilon etc...---------
 
-f0 = 0.5*TWO_PI**3/ nshells #! Total power input at each shells
+f0 = (nu0)**3*TWO_PI**3/ nshells #! Total power input at each shells
 
 # f0 = 0.02 /(N_b**2)*nshells#! Total power input at each shells
 re = np.inf if nu==0 else 1/nu
@@ -171,6 +171,8 @@ pv = uk[0].copy()
 bk = pk.copy()
 theta = pk.copy()
 sig = pk.copy()
+denom1 = pk.copy()
+denom2 = pk.copy()
 bk_w = bk.copy()
 bk_v = bk.copy()
 
@@ -212,10 +214,16 @@ k2b = np.zeros((N, Np, Nf), dtype = np.complex128)
 k3b = np.zeros((N, Np, Nf), dtype = np.complex128)
 k4b = np.zeros((N, Np, Nf), dtype = np.complex128)
 
+temp_k2d = np.zeros((N,Np),dtype = np.complex128)
+temp_2d = np.zeros((Np,N),dtype = np.float64)
+
 arr_temp_k = np.zeros((N, Np, N),dtype= np.float64)
 arr_temp_fr = np.zeros((Np, N, Nf), dtype= np.complex128)      
+arr_temp_fr_2d = np.zeros((Np, N), dtype= np.complex128)      
 arr_temp_ifr = np.zeros((N, Np, Nf), dtype= np.complex128)      
+arr_temp_ifr_2d = np.zeros((N, Np), dtype= np.complex128)      
 arr_mpi = np.zeros((num_process,  Np,  Np, Nf), dtype= np.complex128)
+arr_mpi_2d = np.zeros((num_process,  Np,  Np), dtype= np.complex128)
 arr_mpi_r = np.zeros((num_process,  Np,  Np, N), dtype= np.float64)
 
 
@@ -238,6 +246,20 @@ def irfft_mpi(fu, u):
     return u    
 
 
+def fft_mpi_xy(u2d,fu2d):
+    arr_temp_fr_2d[:] = fft(u2d,axis = -1)
+    arr_mpi_2d[:] = np.swapaxes(np.reshape(arr_temp_fr_2d, (Np,  num_process,  Np)), 0, 1)
+    comm.Alltoall([arr_mpi_2d,  MPI.DOUBLE_COMPLEX], [fu2d,  MPI.DOUBLE_COMPLEX])
+    fu2d[:] = fft(fu2d, axis = 0)
+    return fu2d
+
+def ifft_mpi_xy(fu2d, u2d):
+    arr_temp_ifr_2d[:] = ifft(fu2d,  axis = 0)
+    comm.Alltoall([arr_temp_ifr_2d,  MPI.DOUBLE_COMPLEX], [arr_mpi_2d, MPI.DOUBLE_COMPLEX])
+    arr_temp_fr_2d[:] = np.reshape(np.swapaxes(arr_mpi_2d,  0, 1), (Np,  N))
+    u2d[:] = ifft(arr_temp_fr_2d, axis = -1).real
+    return u2d    
+
 def diff_x(u,  u_x):
     arr_mpi_r[:] = np.moveaxis(np.reshape(u, (Np,  num_process,  Np,  N)),[0,1], [1,0])
     comm.Alltoall([arr_mpi_r,  MPI.DOUBLE], [arr_temp_k,  MPI.DOUBLE])
@@ -257,6 +279,19 @@ def diff_z(u, u_z):
 def e3d_to_e1d(x): #1 Based on whether k is 2D or 3D, it will bin the data accordingly. 
     return np.histogram(k.ravel(),bins = shells,weights=x.ravel())[0] 
 
+def ensure_reality(uk):
+    temp_2d[:] = ifft_mpi_xy(uk[...,0],temp_2d)
+    temp_k2d[:] = fft_mpi_xy(temp_2d,temp_k2d)
+    uk[...,0] = temp_k2d.copy()
+    return uk
+def ensure_div_free(fk):
+    pk[:] = invlap  * (kx*fk[0] + ky*fk[1] + kz*fk[2])*dealias
+    
+    fk[0] = fk[0] + kx*pk
+    fk[1] = fk[1] + ky*pk
+    fk[2] = fk[2] + kz*pk
+    
+    return fk*dealias[None,...]
  
 def vortex(uk,bk): 
     global uk_v,bk_v
@@ -324,41 +359,53 @@ def vortex(uk,bk):
     
 #     return fk*isforcing*dealias, fkb*isforcing*dealias
     
-def forcing(tt,uk,bk,f0 = f0*nshells,cond = cond ,h = dt,theta= theta,pk = pk,f1uk = f1k,f1bk = f1bk,f2uk = f2k, f2bk = f2bk,fk = fk, fkb = fkb):
+def forcing(tt,uk,bk,f0 = f0*nshells,cond = cond ,h = dt,theta= theta,pk = pk,f1uk = f1k,f1bk = f1bk,f2uk = f2k, f2bk = f2bk,fk = fk, fkb = fkb,denom1 = denom1, denom2 = denom2):
 
 
     
     
     # ------------------- negative frequency ------------------- #
     theta[:] = np.random.uniform(0,TWO_PI,(N,Np,Nf))
-    pk[:] = np.exp(1j*theta)*cond
+    pk[:] = ensure_reality(np.exp(1j*theta)*cond*N**3*dealias)
     
-    sig[:] = -(-invlap*(kh**2*N_b**2 +f_corr**2 *kz**2 ))**0.5
     
-    f1uk[0,:] = (pk* (1j*ky + kx*sig)/(sig**2 - f_corr**2+ 1e-16))*np.exp(1j*sig*tt)
-    f1uk[1,:] = (pk* (-1j*kx + ky*sig)/(sig**2 - f_corr**2+ 1e-16))*np.exp(1j*sig*tt)
-    f1bk[:] = (1j*kz*N_b/(N_b**2 - sig**2 + 1e-16)*pk)*np.exp(1j*sig*tt)
-    f1uk[2,:] = (1j*sig*bk/N_b)*np.exp(1j*sig*tt)
+    sig[:] = -(kh**2*N_b**2 +f_corr**2 *kz**2 )**0.5*dealias/np.where(k ==0, np.inf, k)
+    denom1[:] = dealias/np.where(sig**2 - f_corr**2 == 0., np.inf, sig**2 - f_corr**2)
+    denom2[:] = dealias/np.where(N_b**2 - sig**2 == 0., np.inf, N_b**2 - sig**2)
+    
+    f1uk[0,:] = (pk* (1j*ky*f_corr - kx*sig)*denom1)*np.exp(1j*sig*tt)
+    f1uk[1,:] = -(pk* (1j*kx + ky*sig)*denom1)*np.exp(1j*sig*tt)
+    f1uk[2,:] = (kz*sig*pk*denom2)*np.exp(1j*sig*tt)
+    f1bk[:] = (1j*kz*N_b*pk*denom2)*np.exp(1j*sig*tt)
+
+
     
     neg_corr = comm.allreduce(np.sum(normalize*(np.einsum('i...,i...->...',np.conjugate(uk),f1uk) + np.conjugate(bk)*f1bk).real), op = MPI.SUM)
     # ---------------------------------------------------------- #
     # ------------------- positive frequency ------------------- #
     theta[:] = np.random.uniform(0,TWO_PI,(N,Np,Nf))
-    pk[:] = np.exp(1j*theta)*cond
+    pk[:] = ensure_reality(np.exp(1j*theta)*cond*N**3*dealias)
+
     
     sig[:] = (-invlap*(kh**2*N_b**2 +f_corr**2 *kz**2 ))**0.5
+    denom1[:] = 1./np.where(sig**2 - f_corr**2 == 0., np.inf, sig**2 - f_corr**2)
+    denom2[:] = 1./np.where(N_b**2 - sig**2 == 0., np.inf, N_b**2 - sig**2)
     
-    f2uk[0,:] = (pk* (1j*ky + kx*sig)/(sig**2 - f_corr**2+ 1e-16))*np.exp(1j*sig*tt)
-    f2uk[1,:] = (pk* (-1j*kx + ky*sig)/(sig**2 - f_corr**2+ 1e-16))*np.exp(1j*sig*tt)
-    f2bk[:] = (1j*kz*N_b/(N_b**2 - sig**2 + 1e-16)*pk)*np.exp(1j*sig*tt)
-    f2uk[2,:] = (1j*sig*bk/N_b)*np.exp(1j*sig*tt)
+    f2uk[0,:] = (pk* (1j*ky*f_corr - kx*sig)*denom1)*np.exp(1j*sig*tt)
+    f2uk[1,:] = -(pk* (1j*kx + ky*sig)*denom1)*np.exp(1j*sig*tt)
+    f2uk[2,:] = (kz*sig*pk*denom2)*np.exp(1j*sig*tt)
+    f2bk[:] = (1j*kz*N_b*pk*denom2)*np.exp(1j*sig*tt)
+    
+
+
+
     
     pos_corr = comm.allreduce(np.sum(normalize*(np.einsum('i...,i...->...',np.conjugate(uk),f2uk) + np.conjugate(bk)*f2bk).real), op = MPI.SUM)
     
     # ---------------------------------------------------------- #
     norm = comm.allreduce(np.sum(normalize*(np.einsum('i...,i...->...',np.conjugate(f1uk),f1uk) + np.conjugate(f1bk)*f1bk).real))**0.5
-    
-    if np.abs(neg_corr) > 1e-6*(2*f0*h)**0.5*norm: 
+
+    if np.abs(neg_corr) > 1e-10*(2*f0*h)**0.5*norm: 
         beta = -pos_corr/neg_corr
         fk[:] = beta*f1uk  + f2uk
         fkb[:] = beta*f1bk  + f2bk
@@ -369,9 +416,11 @@ def forcing(tt,uk,bk,f0 = f0*nshells,cond = cond ,h = dt,theta= theta,pk = pk,f1
         fkb[:] = beta*f1bk 
         
     alpha = (2.0*f0/comm.allreduce(np.sum(normalize*(np.einsum('i...,i...->...',np.conjugate(fk),fk) + np.conjugate(fkb)*fkb).real))/h)**0.5
+    
+    
     return alpha*fk, alpha*fkb    
      
-def RHS(uk, bk,uk_t,bk_t,visc = 1,forc = 1):
+def RHS(uk, bk,uk_t,bk_t,visc = 1,forc = 1,rhsuk = rhsuk, rhsvk = rhsvk, rhswk = rhswk, rhsbk = rhsbk):
     ## The RHS terms of u, v and w excluding the forcing and the hypervisocsity term 
     
     u[0] = irfft_mpi(uk[0]*dealias, u[0])
@@ -413,10 +462,10 @@ def RHS(uk, bk,uk_t,bk_t,visc = 1,forc = 1):
     
 
     
-    rhsuk[:]  += (0.5*rfft_mpi(rhsu, pk)*conjphase_k + f_corr*uk[1] )*dealias 
-    rhsvk[:]  += (0.5*rfft_mpi(rhsv, pk)*conjphase_k - f_corr*uk[0] )*dealias 
-    rhswk[:]  += (0.5*rfft_mpi(rhsw, pk)*conjphase_k + bk*N_b )*dealias 
-    rhsbk[:] += (0.5*rfft_mpi(rhsb,pk)*conjphase_k - N_b*uk[2])*dealias
+    rhsuk  += (0.5*rfft_mpi(rhsu, pk)*conjphase_k + f_corr*uk[1] )*dealias 
+    rhsvk  += (0.5*rfft_mpi(rhsv, pk)*conjphase_k - f_corr*uk[0] )*dealias 
+    rhswk  += (0.5*rfft_mpi(rhsw, pk)*conjphase_k + bk*N_b )*dealias 
+    rhsbk += (0.5*rfft_mpi(rhsb,pk)*conjphase_k - N_b*uk[2])*dealias
     
     ## The pressure term
     pk[:] = 1j*invlap  * (kx*rhsuk + ky*rhsvk + kz*rhswk)
@@ -587,65 +636,6 @@ def save(i,uk,bk):
         # print( "#----------------------------","\n",f"Total dissipation at time {t[i]} is : {dissp}","\n","#----------------------------")
     return "Done!"    
 
-#* Needs mod
-# def save_hdf5(i,uk):
-    
-    # ek[:] = 0.5*(np.abs(uk[0])**2 + np.abs(uk[1])**2 + np.abs(uk[2])**2)*normalize #! This is the 3D ek array
-    
-    # k1u[:] = RHS(uk, k1u, visc = 0,forc = 0.0)
-    # Pik[:] = np.real(np.conjugate(uk[0])*k1u[0]+np.conjugate(uk[1])*k1u[1]+ np.conjugate(uk[2])*k1u[2])*dealias*normalize
-    # Pik_arr[:] = comm.allreduce(e3d_to_e1d(Pik),op = MPI.SUM)
-    # Pik_arr[:] = np.cumsum(Pik_arr[::-1])[::-1]
-    
-    # ek_arr[:] = 0.0
-    # ek_arr[:] = comm.allreduce(e3d_to_e1d(ek),op = MPI.SUM) #! This is the shell-summed ek array.
-    
-    # u[0] = irfft_mpi(uk[0], u[0])
-    # u[1] = irfft_mpi(uk[1], u[1])
-    # u[2] = irfft_mpi(uk[2], u[2])
-    # # ----------- ----------------------------
-    # #                 Saving the data (field)
-    # # ----------- ----------------------------
-    # new_dir = savePath/f"time_{t[i]:.1f}"
-    # try: new_dir.mkdir(parents=True,  exist_ok=True)
-    # except FileExistsError: pass
-    # comm.Barrier()
-
-    # with h5py.File(new_dir/'Fields.hdf5','w', driver = 'mpio', comm = comm) as f:
-    #     f.create_dataset('uk', (N,N,Nf),dtype = np.complex128)
-    #     f.create_dataset('vk', (N,N,Nf),dtype = np.complex128)
-    #     f.create_dataset('wk', (N,N,Nf),dtype = np.complex128)
-    #     # raise SystemExit
-    #     f.create_dataset('Energy_Spectrum', data = ek_arr,dtype = np.float64)
-    #     f.create_dataset('Flux_Spectrum', data = Pik_arr,dtype = np.float64)
-        
-    #     f['uk'][:,sx,...] = uk[0]*dealias
-    #     f['vk'][:,sx,...] = uk[1]*dealias
-    #     f['wk'][:,sx,...] = uk[2]*dealias
-    #     f.attrs['nu'] = nu
-    #     f.attrs['Power input'] = f0 /TWO_PI**3
-    #     f.attrs['eta'] = m/(N//3)
-    #     f.attrs['t_eta'] = (9*(m/N)**(2/3))/nu0
-    #     f.attrs['forcing'] = f"Isotropic with const power input in shells {shell_no}"
-    #     f.attrs['N'] = N
-        
-
-    # comm.Barrier()
-    
-    # # ----------- ----------------------------
-    # #          Calculating and printing
-    # # ----------- ----------------------------
-    # eng1 = comm.allreduce(np.sum(0.5*(u[0]**2 + u[1]**2 + u[2]**2)*dx*dy*dz), op = MPI.SUM)
-    # eng2 = np.sum(ek_arr)
-    # divmax = comm.allreduce(np.max(np.abs(diff_x(u[0],  rhsu) + diff_y(u[1],rhsv) + diff_z(u[2],rhsw))),op = MPI.MAX)
-    # #! Needs to be changed 
-    # # # dissp = -nu*comm.allreduce(np.sum((kc**(2*lp)*(np.abs(uk[0])**2 + np.abs(uk[1])**2) +sin_to_cos( ks**(2*lp)*(np.abs(uk[2])**2/alph**2 + np.abs(bk)**2)))), op = MPI.SUM)
-    # if rank == 0:
-    #     print( "#----------------------------","\n",f"Energy at time {t[i]} is : {eng1}, {eng2}","\n","#----------------------------")
-    #     print(f"Maximum divergence {divmax}")
-    #     # print( "#----------------------------","\n",f"Total dissipation at time {t[i]} is : {dissp}","\n","#----------------------------")
-    # return "Done!"   
-    
 ## -------------------------------------------------    
     
 ## ------------- Evolving the system ----------------- 
@@ -675,7 +665,7 @@ def evolve_and_save(t,  u):
         t3 = time()
         
         # fk[:] = forcing(uknew,fk)
-        fk[:],fkb[:] = forcing(t[i],uk,bk)
+        # fk[:],fkb[:] = forcing(t[i],uk,bk)
         k1u[:],k1b[:] = RHS(uk,bk, k1u,k1b)
         # k2u[:],k2b[:] = RHS(uk + h*k1u,bk + h*k1b ,k2u,k2b) #! Only for RK2
         k2u[:],k2b[:] = RHS(semi_G_half*(uk + h/2.*k1u) ,semi_G_half*(bk + h/2.*k1b),k2u,k2b)
@@ -683,10 +673,12 @@ def evolve_and_save(t,  u):
         k4u[:],k4b[:] = RHS(semi_G*uk + semi_G_half*h*k3u,semi_G*bk + semi_G_half*h*k3b, k4u,k4b)
         
         # uknew[:] = uk + h/2.0* ( k1u + k2u )  
-        uknew[:] = (semi_G*uk + h/6.0* ( semi_G*k1u + 2*semi_G_half*(k2u + k3u) + k4u)  )*hypervisc + fk*h
-        bknew[:] = (semi_G*bk + h/6.0* ( semi_G*k1b + 2*semi_G_half*(k2b + k3b) + k4b)  )*hypervisc + fkb*h
+        uknew[:] = (semi_G*uk + h/6.0* ( semi_G*k1u + 2*semi_G_half*(k2u + k3u) + k4u)  )*hypervisc 
+        bknew[:] = (semi_G*bk + h/6.0* ( semi_G*k1b + 2*semi_G_half*(k2b + k3b) + k4b)  )*hypervisc 
         
-        
+        fk[:],fkb[:] = forcing(t[i],uknew,bknew)
+        uknew += fk*h*dealias 
+        bknew += fkb*h*dealias
         # uknew[:] = (semi_G*uk + h/6.0* ( semi_G*k1u + 2*semi_G_half*(k2u + k3u) + k4u)  + h*fk)*hypervisc
         # uknew[:] = (uknew + h*fk)
         
@@ -695,24 +687,13 @@ def evolve_and_save(t,  u):
         
         
         """ Enforcing the reality condition """
-        u[0] = irfft_mpi(uknew[0], u[0])
-        u[1] = irfft_mpi(uknew[1], u[1])
-        u[2] = irfft_mpi(uknew[2], u[2])
-        b[:] = irfft_mpi(bknew,b)
+        uk[0] = ensure_reality(uknew[0])
+        uk[1] = ensure_reality(uknew[1])
+        uk[2] = ensure_reality(uknew[2])
+        bk[:] = ensure_reality(bknew)
         
-        uk[0] = rfft_mpi(u[0],uk[0])
-        uk[1] = rfft_mpi(u[1],uk[1])
-        uk[2] = rfft_mpi(u[2],uk[2])
-        bk[:] = rfft_mpi(b,bk)
-        
-        
-        # """Enforcing div free conditon"""
-        # pk[:] = invlap  * (kx*uk[0] + ky*uk[1] + kz*uk[2])
-        # uk[0] = uk[0] + kx*pk
-        # uk[1] = uk[1] + ky*pk
-        # uk[2] = uk[2] + kz*pk
-        
-        # uk[:] = uknew.copy()
+        """Enforcing div free conditon"""
+        uk[:] = ensure_div_free(uk)
   
   
         #! Although RHS should obey the above two conditions, the rfft adds dependent degrees of freedom for kz = 0 that is evolved separately. Therefore, in some extreme cases, numerical errors can build up. We add the two projections to avoid them.
@@ -730,7 +711,7 @@ def evolve_and_save(t,  u):
         comm.Barrier()
         
     ## ---------- Saving the final data ------------
-    save(i+1, uk)
+    save(i+1, uk,bk)
     if rank ==0: print(f"average calculation time per step {calc_time/(t.size-1)}")
     ## ---------------------------------------------
 
@@ -868,8 +849,8 @@ if rank == 0: print(f"Intial vortex energy {ek_v_val},wave energy {ek_w_val}, cr
 
 # raise SystemExit
 
-ek_arr0[0:shell_no[0]] = 0.
-ek_arr0[shell_no[-1] + 1:] = 0.
+# ek_arr0[0:shell_no[0]] = 0.
+# ek_arr0[shell_no[-1] + 1:] = 0.
 
 
 divmax = comm.allreduce(np.max(np.abs( diff_x(u[0],  rhsu) + diff_y(u[1],rhsv) + diff_z(u[2],rhsw))),op = MPI.MAX)
