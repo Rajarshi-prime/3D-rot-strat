@@ -14,7 +14,7 @@ from mpi4py import MPI
 # from pyevtk.hl import imageToVTK
 curr_path = pathlib.Path(__file__).parent
 forcestart = False
-idx = int(float(sys.argv[-1]))
+idx = 1
 
 ## ---------------MPI things--------------
 comm = MPI.COMM_WORLD
@@ -23,7 +23,7 @@ rank = comm.Get_rank()
 ## ---------------------------------------
 
 
-N = 192
+N = 64
 dt = 0.256/N   #! Such that increasing resolution will decrease the dt
 f_corr = 1
 N_bs = [15,20]
@@ -68,10 +68,19 @@ shells[0] = 0.
 ## ---------------------------------------
 
 ## ------------ Paths --------------------
-lp = 8 # Hyperviscosity power
-nu0 = 0.5 #! Viscosity for N = 1
-m = 1 #! Desired kmax*eta
-nu = nu0*(3*m/N)**(2*(lp - 1/3))  #? scaling with resolution. For 512, nu = 0.002 #! Need to add scaling for hyperviscosity
+lp = int(float(sys.argv[-1])) # Hyperviscosity power
+nu0 = 0.59 #! Viscosity for N = 1
+# m = 1.5 #! Desired kmax*eta
+# nu = nu0*(3*m/(N*2**0.5))**(2*(lp - 1/3))  #? scaling with resolution. For 512, nu = 0.002 #! Need to add scaling for hyperviscosity
+m = 15 # Dissipation strength at the highest kmax. 
+nu = m/(2**0.5*N//3)**lp # Because boussinesq does not follow Kolmogorov scaling.
+
+nshells = 1 # Number of consecutive shells to be forced
+#%%
+
+#----  Kolmogorov length scale - \eta \epsilon etc...---------
+
+f0 = (nu0)**3*TWO_PI**3/ nshells #! Total power input at each shells
 re = np.inf if nu==0 else 1/nu
 
 fbyN = f_corr/N_b if N_b != 0 else 0.0
@@ -79,8 +88,8 @@ einit = 1*TWO_PI**3 # Initial energy
 nshells = 2 # Number of consecutive shells to be forced
 shell_no = np.arange(4,4+nshells) # the shells to be forced
 isforcing = True
-if nu!= 0: loadPath = pathlib.Path(f"./data/bsnq/f_{f_corr:.1f}_Nb_{N_b:.1f}/forced_{isforcing}/N_{N}_Re_{re:.1f}")
-else: loadPath = pathlib.Path(f"./data/bsnq/forced_{isforcing}/N_{N}_Re_inf")
+if nu!= 0: loadPath = pathlib.Path(f"./data/bsnq/f_{f_corr:.1f}_Nb_{N_b:.1f}/tide_forced_{isforcing}/N_{N}_Re_{re:.1f}")
+else: loadPath = pathlib.Path(f"./data/bsnq/tide_forced_{isforcing}/N_{N}_Re_inf")
 
 arr_theta = np.zeros((num_process,Np,N,Np),dtype = np.complex128)
 arr_theta_1 = np.zeros((N,N,Np),dtype = np.complex128)
@@ -164,8 +173,8 @@ for jj,time in enumerate(times_o):
     # if rank ==0 : print(f"Loading for time {time:.2f}: Done!")
     
     
-    ukt[jj],bkt[jj] = load_npz(loadPath/f"time_{time:.1f}",ukt[jj],bkt[jj])
-    if rank ==0 : print(f"Loading for time {time:.2f}: Done!")
+    ukt[jj],bkt[jj] = load_npz(loadPath/f"time_{time:.3f}",ukt[jj],bkt[jj])
+    if rank ==0 : print(f"Loading for time {time:.3f}: Done!")
 
 # ent = dx*dy*dz*comm.allreduce(np.sum(bkt**2),op = MPI.SUM)
 if rank ==0: print(f"ukt shape = {ukt.shape}")
