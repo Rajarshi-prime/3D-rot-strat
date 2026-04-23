@@ -74,11 +74,12 @@ if rank ==0 : print(kx_diff.shape, ky_diff.shape, kz_diff.shape)
 #%%
 
 ## ----------- Parameters ----------
-lp = int(float(sys.argv[-1])) # Hyperviscosity power
+# lp = int(float(sys.argv[-1])) # Hyperviscosity power
+lp = 8 # Hyperviscosity power
 nu0 = 0.59 #! Viscosity for N = 1
 # m = 1.5 #! Desired kmax*eta
 # nu = nu0*(3*m/(N*2**0.5))**(2*(lp - 1/3))  #? scaling with resolution. For 512, nu = 0.002 #! Need to add scaling for hyperviscosity
-m = 15 # Dissipation strength at the highest kmax. 
+m = [10,15,20,5,1][int(float(sys.argv[-1]))] # Dissipation strength at the highest kmax. 
 nu = m/(2**0.5*N//3)**lp # Because boussinesq does not follow Kolmogorov scaling.
 
 
@@ -403,7 +404,7 @@ def forcing(tt,uk,bk,f0 = f0*nshells,cond = cond ,h = dt,theta= theta,pk = pk,f1
     pos_corr = comm.allreduce(np.sum(normalize*(np.einsum('i...,i...->...',np.conjugate(uk),f2uk) + np.conjugate(bk)*f2bk).real), op = MPI.SUM)
     
     # ---------------------------------------------------------- #
-    norm = comm.allreduce(np.sum(normalize*(np.einsum('i...,i...->...',np.conjugate(f1uk),f1uk) + np.conjugate(f1bk)*f1bk).real))**0.5
+    norm = comm.allreduce(np.sum(normalize*(np.einsum('i...,i...->...',np.conjugate(f1uk),f1uk) + np.conjugate(f1bk)*f1bk).real),op =MPI.SUM)**0.5
 
     if np.abs(neg_corr) > 1e-10*(2*f0*h)**0.5*norm: 
         beta = -pos_corr/neg_corr
@@ -415,7 +416,7 @@ def forcing(tt,uk,bk,f0 = f0*nshells,cond = cond ,h = dt,theta= theta,pk = pk,f1
         fk[:] = beta*f1uk  
         fkb[:] = beta*f1bk 
         
-    alpha = (2.0*f0/comm.allreduce(np.sum(normalize*(np.einsum('i...,i...->...',np.conjugate(fk),fk) + np.conjugate(fkb)*fkb).real))/h)**0.5
+    alpha = (2.0*f0/comm.allreduce(np.sum(normalize*(np.einsum('i...,i...->...',np.conjugate(fk),fk) + np.conjugate(fkb)*fkb).real),op = MPI.SUM)/h)**0.5
     
     
     return alpha*fk, alpha*fkb    
@@ -639,7 +640,7 @@ def save(i,uk,bk):
 ## -------------------------------------------------    
     
 ## ------------- Evolving the system ----------------- 
-def evolve_and_save(t,  u): 
+def evolve_and_save(t,  uk,bk,uknew=uknew, bknew = bknew): 
     global begin
     h = t[1] - t[0]
     
@@ -877,7 +878,7 @@ if rank ==0 : print(f"Initial Physical space energy: {np.sum(e0)}")
 ## ----- executing the code -------------------------
 t = np.arange(tinit,T+ 0.5*dt, dt)
 t1 = time()
-evolve_and_save(t,u)
+evolve_and_save(t,uk,bk)
 t2 = time() - t1 
 # --------------------------------------------------
 if rank ==0: print(t2)
