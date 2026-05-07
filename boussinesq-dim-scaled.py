@@ -4,12 +4,13 @@ The code forces the dimensional boussinesq equations with constant power input t
 #%%
 import numpy as np 
 from scipy.fft import fft ,  ifft ,  irfft2 ,  rfft2 , irfftn ,  rfftn,   rfft,  irfft,fftfreq
+from scipy.linalg import expm
 from mpi4py import MPI
 from time import time
 import pathlib,sys,h5py
 curr_path = pathlib.Path(__file__).parent
 forcestart = True
-omg_save = True
+omg_save = False
 # idx = int(float(sys.argv[-1]))
 idx = 1
 # forcestart = bool(float(sys.argv[-1]))
@@ -31,10 +32,10 @@ else : isexplicit = 0.
 #%%
 
 ## ------------- Time steps --------------
-N = 192
+N = 32
 dt = 0.256/N   #! Such that increasing resolution will decrease the dt
-f_corr = 1.0
-N_bs = [15,10]
+f_corr = 1
+N_bs = [15,20]
 N_b = N_bs[idx]
 T = 1000 if not omg_save else 31.4/f_corr
 dt_save = 1.0 if not omg_save else 0.1/f_corr
@@ -44,6 +45,7 @@ st = round(dt_save/dt)
 #%%
 
 ## -------------Defining the grid ---------------
+alpha = 20 # Width/Height
 PI = np.pi
 TWO_PI = 2*PI
 Nf = N//2 + 1
@@ -114,8 +116,8 @@ nu,f0*nshells
 #%%
 
 
-if nu!= 0: savePath = pathlib.Path(f"./data/bsnq/f_{f_corr:.1f}_Nb_{N_b:.1f}/tide_test_new_new_forced_{isforcing}/N_{N}_Re_{re:.1f}")
-else: savePath = pathlib.Path(f"./data/bsnq/tide_test_new_new_forced_{isforcing}/N_{N}_Re_inf")
+if nu!= 0: savePath = pathlib.Path(f"./data/bsnq_scaled/f_{f_corr:.1f}_Nb_{N_b:.1f}/tide_test_forced_{isforcing}/N_{N}_Re_{re:.1f}")
+else: savePath = pathlib.Path(f"./data/bsnq_scaled/tide_test_forced_{isforcing}/N_{N}_Re_inf")
 
 if rank == 0:
     print(savePath)
@@ -126,11 +128,12 @@ if rank == 0:
 #%%
 
 lap = -1.0*(kx**2 + ky**2 + kz**2 )
+lap_press = -1.0*(kx**2 + ky**2 + alpha**2 * kz**2 ) #! Laplacian operator modified with alpha
 k = (-lap)**0.5
 kint = np.clip(np.round(k,0).astype(int),None,N//2)
 kh = (kx**2 + ky**2)**0.5
 # cond  = (kh>=shell_no[0])*(kh<=shell_no[-1])*(kz > 1)*(kz<6)
-cond = (np.abs(np.abs(kx) -1.0) < 0.5)*(np.abs(np.abs(ky) -1.0) < 0.5)*(np.abs(np.abs(kz) -3.0) < 0.5)
+cond = (np.abs(np.abs(kx) -1.0) < 0.5)*(np.abs(np.abs(ky) -1.0) < 0.5)*(np.abs(np.abs(kz) - 1.0) < 0.5)
 
 # dealias = kint<=N/3 #! Spherical dealiasing
 # dealias = (abs(kx)<N//3)*(abs(ky)<N//3)*(abs(kz)<N//3) #! Cubic 2/3 dealiasing
@@ -140,7 +143,8 @@ phase_k = np.exp(1j*(kx*dx/2 + ky*dy/2 + kz*dz/2))*dealias
 conjphase_k = np.conjugate(phase_k)*dealias
 
 invlap = dealias/np.where(lap == 0, np.inf,  lap)
-lapwv = -1.0*(kx**2 + ky**2 + (fbyN)**2*kz**2 )
+invlap_press = dealias/np.where(lap_press == 0, np.inf,  lap_press)
+lapwv = -1.0*(kx**2 + ky**2 + (fbyN)**2*alpha**2*kz**2 )
 invlapwv = dealias/np.where(lapwv == 0, np.inf,lapwv)
 
 # Hyperviscous operator
@@ -150,8 +154,24 @@ normalize = np.where((kz== 0) + (kz == N//2) , 1/(N**6/TWO_PI**3),2/(N**6/TWO_PI
 shells = np.arange(-0.5,Nf, 1.)
 shells[0] = 0.
 
-# cond_ky = np.abs(np.round(Ky))<=N//3
-# cond_kz = np.abs(np.round(Kz))<=N//3
+
+L = (np.array([
+    [f_corr*kx*ky*(-invlap_press),          f_corr*(ky**2*(-invlap_press) - 1),       alpha*f_corr*ky*kz*(-invlap_press),                    np.zeros_like(lap_press)],
+    [f_corr - f_corr*kx**2*(-invlap_press),     -f_corr*kx*ky*(-invlap_press),            -alpha*f_corr*kx*kz*(-invlap_press),                    np.zeros_like(lap_press)],
+    [np.zeros_like(lap_press),                  np.zeros_like(lap_press),                      np.zeros_like(lap_press),                        -alpha*N_b+np.zeros_like(lap_press)   ],
+    [-kx*kz*N_b*(-invlap_press),       -ky*kz*N_b*(-invlap_press),            N_b*(kx**2+ky**2)*(-invlap_press)/alpha,          np.zeros_like(lap_press)]
+]) + 0.0j).astype(np.complex128)
+# if rank ==0: 
+#     print(M.shape)
+# raise SystemExit
+# G = np.moveaxis(expm(np.moveaxis(M,[0,1,2,3,4],[3,4,0,1,2])),[0,1,2,3,4],[2,3,4,0,1])
+G_half = np.moveaxis(expm(dt*np.moveaxis(L,[0,1,2,3,4],[3,4,0,1,2])/2.0),[0,1,2,3,4],[2,3,4,0,1])
+del L
+# check_G = np.einsum('ij...,jk...-> ik...',G_half,G_half)
+# maxerror = comm.allreduce(np.abs(G).max(),op = MPI.MAX)
+# if rank ==0: 
+#     print(f"Error in G {maxerror}")
+# raise SystemExit
 ## -------------------------------------------------
 
 
@@ -162,7 +182,7 @@ b1 = b.copy()
 b2 = b.copy()
 b3 = b.copy()
 omg= np.zeros((3, Np, N, N), dtype= np.float64)
-
+temp_4 = np.zeros((4,N,Np,Nf),dtype = np.complex128)
 
 uk = np.zeros((3, N, Np, Nf), dtype= np.complex128)
 uk_w = uk.copy()
@@ -298,21 +318,38 @@ def ensure_div_free(fk):
     
     return fk*dealias[None,...]
  
-def vortex(uk,bk): 
+def vortex(uk,bk,alpha = alpha): 
     global uk_v,bk_v
     """
     Projects the velocity and buoyancy in the vortical modes. 
     """
-    pv[:] = 1j*(kx*uk[1] - ky*uk[0] + kz*bk*(fbyN))
+    pv[:] = 1j*(kx*uk[1] - ky*uk[0] +    alpha*kz*bk*(fbyN))
     uk_v[0] = -1j*ky*pv*invlapwv
     uk_v[1] = 1j*kx*pv*invlapwv
     uk_v[2] = 0. + 0.j
-    bk_v = 1j*kz*pv*invlapwv*(fbyN)
+    bk_v = 1j*alpha*kz*pv*invlapwv*(fbyN)
     
     return uk_v, bk_v
     
+def u_dot_grad(u,f):
+    return u[0]*diff_x(f,b1) + u[1]*diff_y(f,b2) + u[2]*diff_z(f,b3)
 
-
+def inner_product_k(a1k,a2k, b1k,b2k,alpha = alpha):
+    """Calculates quantities like energy in spectral space with factor of alpha in the vertical componennt"""
+    val = comm.allreduce(
+        np.sum(
+            normalize*(np.conjugate(a1k[0])*b1k[0]+np.conjugate(a1k[1])*b1k[1]+np.conjugate(a1k[2])*b1k[2]/alpha**2 + np.conjugate(a2k)*b2k).real
+        ) 
+    , op = MPI.SUM)
+    return val
+def inner_product(a1,a2,b1,b2,alpha = alpha):
+    """Calculates quantities like energy in position space with factor of alpha in the vertical componennt"""
+    val = comm.allreduce(
+        np.sum(
+            a1[0]*b1[0]+a1[1]*b1[1]+a1[2]*b1[2]/alpha**2 + a2*b2
+        ) 
+    , op = MPI.SUM)
+    return val
 # def forcing(uk,bk):
 #     """
 #     Calculates the net dissipation of the flow and injects that amount into larges scales of the horizontal flow
@@ -364,7 +401,7 @@ def vortex(uk,bk):
     
 #     return fk*isforcing*dealias, fkb*isforcing*dealias
     
-def forcing(tt,uk,bk,f0 = f0*nshells,cond = cond ,h = dt,theta= theta,pk = pk,f1uk = f1k,f1bk = f1bk,f2uk = f2k, f2bk = f2bk,fk = fk, fkb = fkb,denom1 = denom1, denom2 = denom2):
+def forcing(tt,uk,bk,f0 = f0*nshells,cond = cond ,h = dt,theta= theta,pk = pk,f1uk = f1k,f1bk = f1bk,f2uk = f2k, f2bk = f2bk,fk = fk, fkb = fkb,denom1 = denom1, denom2 = denom2,alpha = alpha):
 
 
     
@@ -374,41 +411,43 @@ def forcing(tt,uk,bk,f0 = f0*nshells,cond = cond ,h = dt,theta= theta,pk = pk,f1
     pk[:] = ensure_reality(np.exp(1j*theta)*cond*N**3*dealias)
     
     
-    sig[:] = -(-invlap*(kh**2*N_b**2 +f_corr**2 *kz**2 ))**0.5
+    sig[:] = -(-invlap_press*(kh**2*N_b**2 +f_corr**2 *kz**2*alpha**2 ))**0.5
     denom1[:] = dealias/np.where(sig**2 - f_corr**2 == 0., np.inf, sig**2 - f_corr**2)
     denom2[:] = dealias/np.where(N_b**2 - sig**2 == 0., np.inf, N_b**2 - sig**2)
     
     f1uk[0,:] = (pk* (1j*ky*f_corr - kx*sig)*denom1)*np.exp(1j*sig*tt)
     f1uk[1,:] = -(pk* (1j*kx + ky*sig)*denom1)*np.exp(1j*sig*tt)
-    f1uk[2,:] = (kz*sig*pk*denom2)*np.exp(1j*sig*tt)
-    f1bk[:] = (1j*kz*N_b*pk*denom2)*np.exp(1j*sig*tt)
+    f1uk[2,:] = (alpha**2*kz*sig*pk*denom2)*np.exp(1j*sig*tt)
+    f1bk[:] = (1j*alpha*kz*N_b*pk*denom2)*np.exp(1j*sig*tt)
 
 
     
-    neg_corr = comm.allreduce(np.sum(normalize*(np.einsum('i...,i...->...',np.conjugate(uk),f1uk) + np.conjugate(bk)*f1bk).real), op = MPI.SUM)
+    # neg_corr = comm.allreduce(np.sum(normalize*(np.einsum('i...,i...->...',np.conjugate(uk),f1uk) + np.conjugate(bk)*f1bk).real), op = MPI.SUM)
+    neg_corr = inner_product_k(uk,bk,f1uk,f1bk)
     # ---------------------------------------------------------- #
     # ------------------- positive frequency ------------------- #
     theta[:] = np.random.uniform(0,TWO_PI,(N,Np,Nf))
     pk[:] = ensure_reality(np.exp(1j*theta)*cond*N**3*dealias)
 
     
-    sig[:] = (-invlap*(kh**2*N_b**2 +f_corr**2 *kz**2 ))**0.5
-    denom1[:] = 1./np.where(sig**2 - f_corr**2 == 0., np.inf, sig**2 - f_corr**2)
-    denom2[:] = 1./np.where(N_b**2 - sig**2 == 0., np.inf, N_b**2 - sig**2)
+    sig[:] = (-invlap_press*(kh**2*N_b**2 +f_corr**2 *kz**2*alpha**2 ))**0.5
+    denom1[:] = dealias/np.where(sig**2 - f_corr**2 == 0., np.inf, sig**2 - f_corr**2)
+    denom2[:] = dealias/np.where(N_b**2 - sig**2 == 0., np.inf, N_b**2 - sig**2)
     
     f2uk[0,:] = (pk* (1j*ky*f_corr - kx*sig)*denom1)*np.exp(1j*sig*tt)
     f2uk[1,:] = -(pk* (1j*kx + ky*sig)*denom1)*np.exp(1j*sig*tt)
-    f2uk[2,:] = (kz*sig*pk*denom2)*np.exp(1j*sig*tt)
-    f2bk[:] = (1j*kz*N_b*pk*denom2)*np.exp(1j*sig*tt)
+    f2uk[2,:] = (alpha**2*kz*sig*pk*denom2)*np.exp(1j*sig*tt)
+    f2bk[:] = (1j*alpha*kz*N_b*pk*denom2)*np.exp(1j*sig*tt)
     
 
 
 
     
-    pos_corr = comm.allreduce(np.sum(normalize*(np.einsum('i...,i...->...',np.conjugate(uk),f2uk) + np.conjugate(bk)*f2bk).real), op = MPI.SUM)
-    
+    # pos_corr = comm.allreduce(np.sum(normalize*(np.einsum('i...,i...->...',np.conjugate(uk),f2uk) + np.conjugate(bk)*f2bk).real), op = MPI.SUM)
+    pos_corr = inner_product_k(uk,bk,f2uk,f2bk)
     # ---------------------------------------------------------- #
-    norm = comm.allreduce(np.sum(normalize*(np.einsum('i...,i...->...',np.conjugate(f1uk),f1uk) + np.conjugate(f1bk)*f1bk).real),op =MPI.SUM)**0.5
+    # norm = comm.allreduce(np.sum(normalize*(np.einsum('i...,i...->...',np.conjugate(f1uk),f1uk) + np.conjugate(f1bk)*f1bk).real),op =MPI.SUM)**0.5
+    norm = inner_product_k(f1uk,f1bk,f1uk,f1bk)**0.5
 
     if np.abs(neg_corr) > 1e-10*(2*f0*h)**0.5*norm: 
         beta = -pos_corr/neg_corr
@@ -420,12 +459,28 @@ def forcing(tt,uk,bk,f0 = f0*nshells,cond = cond ,h = dt,theta= theta,pk = pk,f1
         fk[:] = beta*f1uk  
         fkb[:] = beta*f1bk 
         
-    alpha = (2.0*f0/comm.allreduce(np.sum(normalize*(np.einsum('i...,i...->...',np.conjugate(fk),fk) + np.conjugate(fkb)*fkb).real),op = MPI.SUM)/h)**0.5
+    # alpha = (2.0*f0/comm.allreduce(np.sum(normalize*(np.einsum('i...,i...->...',np.conjugate(fk),fk) + np.conjugate(fkb)*fkb).real),op = MPI.SUM)/h)**0.5
+    alpha = (2.0*f0/inner_product_k(fk,fkb, fk,fkb)/h)**0.5
+
     
     
     return alpha*fk, alpha*fkb    
-     
-def RHS(uk, bk,uk_t,bk_t,visc = 1,forc = 1,rhsuk = rhsuk, rhsvk = rhsvk, rhswk = rhswk, rhsbk = rhsbk):
+
+
+
+
+
+
+
+
+def G_prod(uk,bk,G_half = G_half):
+    return np.einsum('ij...,jk...,k...->i...',G_half,G_half,np.concatenate((uk,bk[None,...]),axis = 0))
+    
+def G_half_prod(uk,bk,G_half = G_half):
+    return np.einsum('ij...,j...->i...',G_half,np.concatenate((uk,bk[None,...]),axis = 0))
+
+
+def RHS(uk, bk,uk_t,bk_t,visc = 1,forc = 1,rhsuk = rhsuk, rhsvk = rhsvk, rhswk = rhswk, rhsbk = rhsbk,alpha = alpha):
     ## The RHS terms of u, v and w excluding the forcing and the hypervisocsity term 
     
     u[0] = irfft_mpi(uk[0]*dealias, u[0])
@@ -433,14 +488,14 @@ def RHS(uk, bk,uk_t,bk_t,visc = 1,forc = 1,rhsuk = rhsuk, rhsvk = rhsvk, rhswk =
     u[2] = irfft_mpi(uk[2]*dealias, u[2])
     b[:] = irfft_mpi(bk*dealias, b)
     
-    omg[0] = irfft_mpi(1j*(ky*uk[2] - kz*uk[1])*dealias,omg[0])
-    omg[1] = irfft_mpi(1j*(kz*uk[0] - kx*uk[2])*dealias,omg[1])
-    omg[2] = irfft_mpi(1j*(kx*uk[1] - ky*uk[0])*dealias,omg[2])
+    # omg[0] = irfft_mpi(1j*(ky*uk[2] - kz*uk[1])*dealias,omg[0])
+    # omg[1] = irfft_mpi(1j*(kz*uk[0] - kx*uk[2])*dealias,omg[1])
+    # omg[2] = irfft_mpi(1j*(kx*uk[1] - ky*uk[0])*dealias,omg[2])
     
-    rhsu[:] = (omg[2]*u[1] - omg[1]*u[2]) 
-    rhsv[:] = (omg[0]*u[2] - omg[2]*u[0]) 
-    rhsw[:] = (omg[1]*u[0] - omg[0]*u[1]) 
-    rhsb[:] = - (u[0]*diff_x(b,b1) + u[1]*diff_y(b,b2) + u[2]*diff_z(b,b3)) 
+    rhsu[:] = -(u_dot_grad(u,u[0])) 
+    rhsv[:] = -(u_dot_grad(u,u[1])) 
+    rhsw[:] = -(u_dot_grad(u,u[2])) 
+    rhsb[:] = - (u_dot_grad(u,b)) 
     
 
     
@@ -456,37 +511,39 @@ def RHS(uk, bk,uk_t,bk_t,visc = 1,forc = 1,rhsuk = rhsuk, rhsvk = rhsvk, rhswk =
     u[2] = irfft_mpi(uk[2]*phase_k, u[2])
     b[:] = irfft_mpi(bk*phase_k, b)
     
-    omg[0] = irfft_mpi(1j*(ky*uk[2] - kz*uk[1])*phase_k,omg[0])
-    omg[1] = irfft_mpi(1j*(kz*uk[0] - kx*uk[2])*phase_k,omg[1])
-    omg[2] = irfft_mpi(1j*(kx*uk[1] - ky*uk[0])*phase_k,omg[2])
+    # omg[0] = irfft_mpi(1j*(ky*uk[2] - kz*uk[1])*phase_k,omg[0])
+    # omg[1] = irfft_mpi(1j*(kz*uk[0] - kx*uk[2])*phase_k,omg[1])
+    # omg[2] = irfft_mpi(1j*(kx*uk[1] - ky*uk[0])*phase_k,omg[2])
     
-    rhsu[:] = (omg[2]*u[1] - omg[1]*u[2]) 
-    rhsv[:] = (omg[0]*u[2] - omg[2]*u[0]) 
-    rhsw[:] = (omg[1]*u[0] - omg[0]*u[1]) 
-    rhsb[:] = - (u[0]*diff_x(b,b1) + u[1]*diff_y(b,b2) + u[2]*diff_z(b,b3)) 
+    # rhsu[:] = (omg[2]*u[1] - omg[1]*u[2]) 
+    # rhsv[:] = (omg[0]*u[2] - omg[2]*u[0]) 
+    # rhsw[:] = (omg[1]*u[0] - omg[0]*u[1]) 
+    rhsu[:] = -(u_dot_grad(u,u[0])) 
+    rhsv[:] = -(u_dot_grad(u,u[1])) 
+    rhsw[:] = -(u_dot_grad(u,u[2])) 
+    rhsb[:] = - (u_dot_grad(u,b)) 
     
 
     
+    # rhsuk  += (0.5*rfft_mpi(rhsu, pk)*conjphase_k )*dealias 
+    # rhsvk  += (0.5*rfft_mpi(rhsv, pk)*conjphase_k )*dealias 
+    # rhswk  += (0.5*rfft_mpi(rhsw, pk)*conjphase_k  )*dealias 
+    # rhsbk += (0.5*rfft_mpi(rhsb,pk)*conjphase_k)*dealias
+    
     rhsuk  += (0.5*rfft_mpi(rhsu, pk)*conjphase_k + f_corr*uk[1] )*dealias 
     rhsvk  += (0.5*rfft_mpi(rhsv, pk)*conjphase_k - f_corr*uk[0] )*dealias 
-    rhswk  += (0.5*rfft_mpi(rhsw, pk)*conjphase_k + bk*N_b )*dealias 
-    rhsbk += (0.5*rfft_mpi(rhsb,pk)*conjphase_k - N_b*uk[2])*dealias
-    
-    
-    # rhsuk[:]  = (0.0*rfft_mpi(rhsu, pk)*conjphase_k + f_corr*uk[1] )*dealias 
-    # rhsvk[:]  = (0.0*rfft_mpi(rhsv, pk)*conjphase_k - f_corr*uk[0] )*dealias 
-    # rhswk[:]  = (0.0*rfft_mpi(rhsw, pk)*conjphase_k + bk*N_b )*dealias 
-    # rhsbk[:] = (0.0*rfft_mpi(rhsb,pk)*conjphase_k - N_b*uk[2])*dealias
+    rhswk  += (0.5*rfft_mpi(rhsw, pk)*conjphase_k + alpha*bk*N_b )*dealias 
+    rhsbk += (0.5*rfft_mpi(rhsb,pk)*conjphase_k - N_b*uk[2]/alpha)*dealias
     
     ## The pressure term
-    pk[:] = 1j*invlap  * (kx*rhsuk + ky*rhsvk + kz*rhswk)
+    pk[:] = 1j*invlap_press  * (kx*rhsuk + ky*rhsvk + kz*rhswk)
     
     
 
     ## The RHS term with the pressure   
     uk_t[0] = rhsuk - 1j*kx*pk - nu*((-lap)**lp)*uk[0]*isexplicit * visc
     uk_t[1] = rhsvk - 1j*ky*pk - nu*((-lap)**lp)*uk[1]*isexplicit * visc
-    uk_t[2] = rhswk - 1j*kz*pk - nu*((-lap)**lp)*uk[2]*isexplicit * visc
+    uk_t[2] = rhswk - 1j*alpha**2*kz*pk - nu*((-lap)**lp)*uk[2]*isexplicit * visc
     bk_t[:] = rhsbk - nu*((-lap)**lp)*bk*isexplicit * visc
 
         
@@ -515,8 +572,6 @@ def load_sanjay():
         u[2,lidx] = Field['wfull'][idx]*(fbyN)
         b[lidx] = Field['bfull'][idx]
     return u,b
-
-#* To update
 
 
 def load_npz(paths,uk,bk):
@@ -558,26 +613,20 @@ def load_npz(paths,uk,bk):
     return uk,bk
     
 
-# def load_hdf5(paths, u):
-#     with h5py.File(paths/'Fields.hdf5','r+', driver = 'mpio', comm = comm) as f:
-#         u[0] = f['u'][sx,...][:]
-#         u[1] = f['v'][sx,...][:]
-#         u[2] = f['w'][sx,...][:]
-    
-#     return u
 
 
-def save(i,uk,bk):
+
+def save(i,uk,bk,alpha = alpha):
     global ek,k1u,k1b,ek_arr,Pik,Pik_arr
     
     k1u[:],k1b[:] = RHS(uk,bk, k1u,k1b,visc = 0,forc = 0)
     
-    ek[:] = 0.5*(np.abs(uk[0])**2 + np.abs(uk[1])**2 + np.abs(uk[2])**2 + np.abs(bk)**2)*normalize #! This is the 3D ek array
+    ek[:] = 0.5*(np.abs(uk[0])**2 + np.abs(uk[1])**2 + np.abs(uk[2])**2 /alpha**2+ np.abs(bk)**2)*normalize #! This is the 3D ek array
     ek_arr[:] = 0.0
     ek_arr[:] = comm.allreduce(e3d_to_e1d(ek),op = MPI.SUM) #! This is the shell-summed ek array.
     ekh_arr[:] = comm.allreduce(e3d_to_e1d(ek,kh),op = MPI.SUM) #! This is the shell-summed ek array.
     ekz_arr[:] = comm.allreduce(e3d_to_e1d(ek,kh),op = MPI.SUM) #! This is the shell-summed ek array.
-    Pik[:] = np.real(np.conjugate(uk[0])*k1u[0]+np.conjugate(uk[1])*k1u[1]+ np.conjugate(uk[2])*k1u[2] + np.conjugate(bk)*k1b)*dealias*normalize
+    Pik[:] = np.real(np.conjugate(uk[0])*k1u[0]+np.conjugate(uk[1])*k1u[1]+ np.conjugate(uk[2])*k1u[2]/alpha**2 + np.conjugate(bk)*k1b)*dealias*normalize
     
     Pik_arr[:] = comm.allreduce(e3d_to_e1d(Pik),op = MPI.SUM)
     Pik_arr[:] = np.cumsum(Pik_arr[::-1])[::-1]
@@ -593,8 +642,8 @@ def save(i,uk,bk):
     uk_v[:],bk_v[:] = vortex(uk,bk)
     uk_w[:],bk_w[:] = uk - uk_v, bk -bk_v
 
-    ek_v = 0.5*(np.abs(uk_v[0])**2 + np.abs(uk_v[1])**2 + np.abs(uk_v[2])**2 + np.abs(bk_v)**2)*normalize
-    ek_w = 0.5*(np.abs(uk_w[0])**2 + np.abs(uk_w[1])**2 + np.abs(uk_w[2])**2 + np.abs(bk_w)**2)*normalize
+    ek_v = 0.5*(np.abs(uk_v[0])**2 + np.abs(uk_v[1])**2 + np.abs(uk_v[2])**2/alpha**2 + np.abs(bk_v)**2)*normalize
+    ek_w = 0.5*(np.abs(uk_w[0])**2 + np.abs(uk_w[1])**2 + np.abs(uk_w[2])**2/alpha**2 + np.abs(bk_w)**2)*normalize
 
     ek_v_val = comm.allreduce(ek_v.sum(),op = MPI.SUM)
     ek_w_val = comm.allreduce(ek_w.sum(),op = MPI.SUM)
@@ -603,6 +652,8 @@ def save(i,uk,bk):
     u[1] = irfft_mpi(uk[1], u[1])
     u[2] = irfft_mpi(uk[2], u[2])
     b[:] = irfft_mpi(bk, b)
+    omg[2] = irfft_mpi(1j*(kx*uk[1] - ky*uk[0])*dealias,omg[2])
+    zeta_rms = (comm.allreduce(np.sum(omg[2]**2), op =MPI.SUM )/N**3)**0.5
     # ----------- ----------------------------
     #                 Saving the data (field)
     # ----------- ----------------------------
@@ -648,6 +699,12 @@ def save(i,uk,bk):
                 f["/energy_timeseries/ubal_energy"].resize(f["/energy_timeseries/ubal_energy"].shape[0] + 1)
                 f["/energy_timeseries/ubal_energy"][-1] = ek_w_val
                 
+            if 'zeta_rms_timeseries' not in f:
+                f.create_dataset('zeta_rms_timeseries',data = np.array([zeta_rms]),maxshape = (None),chunks = True)
+            else:                 
+                f['zeta_rms_timeseries'].resize(f["zeta_rms_timeseries"].shape[0] + 1)
+                f['zeta_rms_timeseries'][-1] = zeta_rms
+                
                 
             try: f[f"Energy_Spectra/time_{t[i]:.3f}"][...] = ek_arr
             except KeyError: f[f"Energy_Spectra/time_{t[i]:.3f}"] = ek_arr
@@ -680,7 +737,7 @@ def save(i,uk,bk):
     # ----------- ----------------------------
     #          Calculating and printing
     # ----------- ----------------------------
-    eng1 = comm.allreduce(np.sum(0.5*(u[0]**2 + u[1]**2 + u[2]**2 + b**2)*dx*dy*dz), op = MPI.SUM)
+    eng1 = comm.allreduce(np.sum(0.5*(u[0]**2 + u[1]**2 + u[2]**2/alpha**2 + b**2)*dx*dy*dz), op = MPI.SUM)
     eng2 = np.sum(ek_arr)
     divmax = comm.allreduce(np.max(np.abs(diff_x(u[0],  rhsu) + diff_y(u[1],rhsv) + diff_z(u[2],rhsw))),op = MPI.MAX)
     #! Needs to be changed 
@@ -695,10 +752,10 @@ def save(i,uk,bk):
 ## -------------------------------------------------    
     
 ## ------------- Evolving the system ----------------- 
-def evolve_and_save(t,  uk,bk,uknew=uknew, bknew = bknew): 
+def evolve_and_save(t,  uk,bk,uknew=uknew, bknew = bknew,temp_4 = temp_4): 
     global begin
     h = t[1] - t[0]
-    
+    z
     if viscosity_integrator == "implicit": hypervisc= dealias*(1. + h*vis)**(-1)
     else: hypervisc = 1.
     
@@ -722,17 +779,28 @@ def evolve_and_save(t,  uk,bk,uknew=uknew, bknew = bknew):
         
         # fk[:] = forcing(uknew,fk)
         # fk[:],fkb[:] = forcing(t[i],uk,bk)
-        k1u[:],k1b[:] = RHS(uk,bk, k1u,k1b)
+        temp_4[:] = np.concatenate((uk,bk[None,:]),axis = 0)
+        k1u[:],k1b[:] = RHS(temp_4[:3],temp_4[3], k1u,k1b)
         # k2u[:],k2b[:] = RHS(uk + h*k1u,bk + h*k1b ,k2u,k2b) #! Only for RK2
-        k2u[:],k2b[:] = RHS(semi_G_half*(uk + h/2.*k1u) ,semi_G_half*(bk + h/2.*k1b),k2u,k2b)
-        k3u[:],k3b[:] = RHS(semi_G_half*uk + h/2.*k2u, semi_G_half*bk + h/2.*k2b,k3u,k3b)
-        k4u[:],k4b[:] = RHS(semi_G*uk + semi_G_half*h*k3u,semi_G*bk + semi_G_half*h*k3b, k4u,k4b)
+        # k2u[:],k2b[:] = RHS(semi_G_half*(uk + h/2.*k1u) ,semi_G_half*(bk + h/2.*k1b),k2u,k2b)
+        temp_4[:] = G_half_prod(uk + h/2.*k1u,bk + h/2.*k1b)
+        k2u[:],k2b[:] = RHS(temp_4[:3],temp_4[3],k2u,k2b)
+        # k3u[:],k3b[:] = RHS(semi_G_half*uk + h/2.*k2u, semi_G_half*bk + h/2.*k2b,k3u,k3b)
+        temp_4[:] = G_half_prod(uk ,bk ) + h/2.*np.concatenate((k2u,k2b[None,:]),axis = 0)
+        k3u[:],k3b[:] = RHS(temp_4[:3],temp_4[3],k3u,k3b)
+        # k4u[:],k4b[:] = RHS(semi_G*uk + semi_G_half*h*k3u,semi_G*bk + semi_G_half*h*k3b, k4u,k4b)
+        temp_4[:] = G_prod(uk, bk) + h*G_half_prod(k3u,k3b)
+        k4u[:],k4b[:] = RHS(temp_4[:3],temp_4[3], k4u,k4b)
         
         # uknew[:] = uk + h/2.0* ( k1u + k2u )  
-        uknew[:] = (semi_G*uk + h/6.0* ( semi_G*k1u + 2*semi_G_half*(k2u + k3u) + k4u)  )*hypervisc 
-        bknew[:] = (semi_G*bk + h/6.0* ( semi_G*k1b + 2*semi_G_half*(k2b + k3b) + k4b)  )*hypervisc 
+        # uknew[:] = (semi_G*uk + h/6.0* ( semi_G*k1u + 2*semi_G_half*(k2u + k3u) + k4u)  )*hypervisc 
+        # bknew[:] = (semi_G*bk + h/6.0* ( semi_G*k1b + 2*semi_G_half*(k2b + k3b) + k4b)  )*hypervisc 
+        temp_4 = G_prod(uk,bk) + h/6.0*(G_prod(k1u,k1b) + 2*G_half_prod(k2u + k3u, k2b + k3b) + np.concatenate((k4u,k4b[None,:]),axis = 0))
+        uknew[:] = temp_4[:3]
+        bknew[:] = temp_4[3]
         
-        fk[:],fkb[:] = forcing(t[i],uknew,bknew)
+        if t[i] < np.inf: fk[:],fkb[:] = forcing(t[i],uknew,bknew)
+        else: fk[:],fkb[:]= 0.,0.
         uknew += fk*h*dealias 
         bknew += fkb*h*dealias
         # uknew[:] = (semi_G*uk + h/6.0* ( semi_G*k1u + 2*semi_G_half*(k2u + k3u) + k4u)  + h*fk)*hypervisc
@@ -791,7 +859,7 @@ if not forcestart:
     ## ------------------------- Beginning from existing data -------------------------
     if rank ==0 : print("Found existing simulation! Using last saved data.")
     """Loading the data from the last time  """    
-    # paths = sorted([x for x in pathlib.Path("/mnt/pfs/rajarshi.chattopadhyay/codes/HIT_3D/data/forced_True/N_512_Re_500.0").iterdir() if "time_" in str(x)], key=os.path.getmtime)
+    # paths = sorted([x for x in pathlib.Path("/mnt/pfs/rajarshi.chattopadhyay/codes/HIT_3D/(-lap_press)ata/forced_True/N_512_Re_500.0").iterdir() if "time_" in str(x)], key=os.path.getmtime)
     
     
     # paths = sorted([x for x in (savePath).iterdir() if "time_" in str(x)], key=os.path.getmtime)
@@ -861,7 +929,7 @@ if forcestart:
     uk[1] = uk[1] + invlap*ky*trm
     uk[2] = uk[2] + invlap*kz*trm
     
-    ek[:] = 0.5*(np.abs(uk[0])**2 + np.abs(uk[1])**2 + np.abs(uk[2])**2 + np.abs(bk)**2)*normalize #! This is the 3D ek array
+    ek[:] = 0.5*(np.abs(uk[0])**2 + np.abs(uk[1])**2 + np.abs(uk[2])**2/alpha**2 + np.abs(bk)**2)*normalize #! This is the 3D ek array
     ek_arr0 = comm.allreduce(e3d_to_e1d(ek),op = MPI.SUM) #! This is the shell-summed ek a
     # if rank ==0: print(ek_arr0, np.sum(ek_arr0))
     e0 = np.sum(ek_arr0)
@@ -881,7 +949,7 @@ if forcestart:
     tinit = 0.
 
 
-ek[:] = 0.5*(np.abs(uk[0])**2 + np.abs(uk[1])**2 + np.abs(uk[2])**2 + np.abs(bk)**2)*normalize #! This is the 3D ek array
+ek[:] = 0.5*(np.abs(uk[0])**2 + np.abs(uk[1])**2 + np.abs(uk[2])**2/alpha**2 + np.abs(bk)**2)*normalize #! This is the 3D ek array
 ek_arr0 = comm.allreduce(e3d_to_e1d(ek),op = MPI.SUM) #! This is the shell-summed ek a
 if rank ==0: print(ek_arr0, np.sum(ek_arr0))
 
@@ -892,8 +960,8 @@ uk_w[:],bk_w[:] = uk - uk_v,bk - bk_v
 
 ek_cross = ((np.einsum('ipqr,ipqr->',np.conjugate(uk_w),uk_v*normalize)) + np.einsum('pqr,pqr->', np.conjugate(bk_w),bk_v*normalize)).real
 
-ek_v = 0.5*(np.abs(uk_v[0])**2 + np.abs(uk_v[1])**2 + np.abs(uk_v[2])**2 + np.abs(bk_v)**2)*normalize
-ek_w = 0.5*(np.abs(uk_w[0])**2 + np.abs(uk_w[1])**2 + np.abs(uk_w[2])**2 + np.abs(bk_w)**2)*normalize
+ek_v = 0.5*(np.abs(uk_v[0])**2 + np.abs(uk_v[1])**2 + np.abs(uk_v[2])**2/alpha**2 + np.abs(bk_v)**2)*normalize
+ek_w = 0.5*(np.abs(uk_w[0])**2 + np.abs(uk_w[1])**2 + np.abs(uk_w[2])**2/alpha**2 + np.abs(bk_w)**2)*normalize
 
 
 ek_cross_val = comm.allreduce(ek_cross,op = MPI.SUM)
@@ -913,7 +981,7 @@ divmax = comm.allreduce(np.max(np.abs( diff_x(u[0],  rhsu) + diff_y(u[1],rhsv) +
 if rank ==0 : print(f" max divergence {divmax}")
 
 #----------------- The initial energy ------------------
-e0 = comm.allreduce(0.5*dx*dy*dz*np.sum(u[0]**2 + u[1]**2 + (u[2]**2) + b**2 ),op = MPI.SUM)
+e0 = comm.allreduce(0.5*dx*dy*dz*np.sum(u[0]**2 + u[1]**2 + (u[2]**2)/alpha**2 + b**2 ),op = MPI.SUM)
 if rank ==0 : print(f"Initial Physical space energy: {np.sum(e0)}")
 #-------------------------------------------------------
 

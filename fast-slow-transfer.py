@@ -1,4 +1,4 @@
-""" 
+"""
 1. This will load the slow data and the original data
 2. Compute the flux and the transfer for each time step.
 3. Save the net transfer. 

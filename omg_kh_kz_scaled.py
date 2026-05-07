@@ -27,7 +27,7 @@ rank = comm.Get_rank()
 N = 192
 dt = 0.256/N   #! Such that increasing resolution will decrease the dt
 f_corr = 1.0
-N_bs = [15,10]
+N_bs = [15,20]
 N_b = N_bs[idx]
 T = 1000 if not omg_save else 31.4/f_corr
 dt_save = 1.0 if not omg_save else 0.1/f_corr
@@ -92,8 +92,8 @@ einit = 1*TWO_PI**3 # Initial energy
 nshells = 2 # Number of consecutive shells to be forced
 shell_no = np.arange(4,4+nshells) # the shells to be forced
 isforcing = True
-if nu!= 0: loadPath = pathlib.Path(f"./data/bsnq/f_{f_corr:.1f}_Nb_{N_b:.1f}/tide_test_new_new_forced_{isforcing}/N_{N}_Re_{re:.1f}")
-else: loadPath = pathlib.Path(f"./data/bsnq/tide_test_new_new_forced_{isforcing}/N_{N}_Re_inf")
+if nu!= 0: loadPath = pathlib.Path(f"./data/bsnq_scaled/f_{f_corr:.1f}_Nb_{N_b:.1f}/tide_test_forced_{isforcing}/N_{N}_Re_{re:.1f}")
+else: loadPath = pathlib.Path(f"./data/bsnq_scaled/tide_test_forced_{isforcing}/N_{N}_Re_inf")
 
 arr_theta = np.zeros((num_process,Np,N,Np),dtype = np.complex128)
 arr_theta_1 = np.zeros((N,N,Np),dtype = np.complex128)
@@ -179,13 +179,11 @@ for jj,time in enumerate(times_o):
     
     ukt[jj],bkt[jj] = load_npz(loadPath/f"time_{time:.3f}",ukt[jj],bkt[jj])
     if rank ==0 : print(f"Loading for time {time:.3f}: Done!")
-    # print(f"Tot_energy:{")
 
 # ent = dx*dy*dz*comm.allreduce(np.sum(bkt**2),op = MPI.SUM)
 if rank ==0: print(f"ukt shape = {ukt.shape}")
 e_uk_omg = np.abs(fft(ukt,axis = 0))**2
 e_bk_omg = np.abs(fft(bkt,axis = 0))**2
-print(f"Tot energy, {e_uk_omg.sum() + e_bk_omg.sum()}")
 del bkt
 if rank ==0:
     print("FFT done!")
