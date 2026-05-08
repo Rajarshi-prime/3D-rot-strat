@@ -155,18 +155,18 @@ shells = np.arange(-0.5,Nf, 1.)
 shells[0] = 0.
 
 
-L = (np.array([
-    [f_corr*kx*ky*(-invlap_press),          f_corr*(ky**2*(-invlap_press) - 1),       alpha*f_corr*ky*kz*(-invlap_press),                    np.zeros_like(lap_press)],
-    [f_corr - f_corr*kx**2*(-invlap_press),     -f_corr*kx*ky*(-invlap_press),            -alpha*f_corr*kx*kz*(-invlap_press),                    np.zeros_like(lap_press)],
-    [np.zeros_like(lap_press),                  np.zeros_like(lap_press),                      np.zeros_like(lap_press),                        -alpha*N_b+np.zeros_like(lap_press)   ],
-    [-kx*kz*N_b*(-invlap_press),       -ky*kz*N_b*(-invlap_press),            N_b*(kx**2+ky**2)*(-invlap_press)/alpha,          np.zeros_like(lap_press)]
+Lmat = (np.array([
+    [-f_corr*kx*ky*(-invlap_press),                    f_corr*(kx**2*(-invlap_press) - 1),           0*invlap_press,      alpha*kx*kz*N_b*(-invlap_press)],
+    [-f_corr*(ky**2*(-invlap_press) - 1),              f_corr*kx*ky*(-invlap_press),                 0*invlap_press,      alpha*ky*kz*N_b*(-invlap_press)],
+    [-alpha**2*f_corr*ky*kz*(-invlap_press),           alpha**2*f_corr*kx*kz*(-invlap_press),        0*invlap_press,     -alpha*N_b*(kx**2 + ky**2)*(-invlap_press)],
+    [0*invlap_press,                             0*invlap_press,                          N_b/alpha + 0*invlap_press, 0*invlap_press]
 ]) + 0.0j).astype(np.complex128)
 # if rank ==0: 
 #     print(M.shape)
 # raise SystemExit
 # G = np.moveaxis(expm(np.moveaxis(M,[0,1,2,3,4],[3,4,0,1,2])),[0,1,2,3,4],[2,3,4,0,1])
-G_half = np.moveaxis(expm(dt*np.moveaxis(L,[0,1,2,3,4],[3,4,0,1,2])/2.0),[0,1,2,3,4],[2,3,4,0,1])
-del L
+G_half = np.moveaxis(expm(dt*np.moveaxis(Lmat,[0,1,2,3,4],[3,4,0,1,2])/2.0),[0,1,2,3,4],[2,3,4,0,1])
+del Lmat
 # check_G = np.einsum('ij...,jk...-> ik...',G_half,G_half)
 # maxerror = comm.allreduce(np.abs(G).max(),op = MPI.MAX)
 # if rank ==0: 
@@ -525,15 +525,15 @@ def RHS(uk, bk,uk_t,bk_t,visc = 1,forc = 1,rhsuk = rhsuk, rhsvk = rhsvk, rhswk =
     
 
     
-    # rhsuk  += (0.5*rfft_mpi(rhsu, pk)*conjphase_k )*dealias 
-    # rhsvk  += (0.5*rfft_mpi(rhsv, pk)*conjphase_k )*dealias 
-    # rhswk  += (0.5*rfft_mpi(rhsw, pk)*conjphase_k  )*dealias 
-    # rhsbk += (0.5*rfft_mpi(rhsb,pk)*conjphase_k)*dealias
+    rhsuk  += (0.5*rfft_mpi(rhsu, pk)*conjphase_k )*dealias 
+    rhsvk  += (0.5*rfft_mpi(rhsv, pk)*conjphase_k )*dealias 
+    rhswk  += (0.5*rfft_mpi(rhsw, pk)*conjphase_k  )*dealias 
+    rhsbk += (0.5*rfft_mpi(rhsb,pk)*conjphase_k)*dealias
     
-    rhsuk  += (0.5*rfft_mpi(rhsu, pk)*conjphase_k + f_corr*uk[1] )*dealias 
-    rhsvk  += (0.5*rfft_mpi(rhsv, pk)*conjphase_k - f_corr*uk[0] )*dealias 
-    rhswk  += (0.5*rfft_mpi(rhsw, pk)*conjphase_k + alpha*bk*N_b )*dealias 
-    rhsbk += (0.5*rfft_mpi(rhsb,pk)*conjphase_k - N_b*uk[2]/alpha)*dealias
+    # rhsuk  += (0.5*rfft_mpi(rhsu, pk)*conjphase_k + f_corr*uk[1] )*dealias 
+    # rhsvk  += (0.5*rfft_mpi(rhsv, pk)*conjphase_k - f_corr*uk[0] )*dealias 
+    # rhswk  += (0.5*rfft_mpi(rhsw, pk)*conjphase_k + alpha*bk*N_b )*dealias 
+    # rhsbk += (0.5*rfft_mpi(rhsb,pk)*conjphase_k - N_b*uk[2]/alpha)*dealias
     
     ## The pressure term
     pk[:] = 1j*invlap_press  * (kx*rhsuk + ky*rhsvk + kz*rhswk)
@@ -752,7 +752,7 @@ def save(i,uk,bk,alpha = alpha):
 ## -------------------------------------------------    
     
 ## ------------- Evolving the system ----------------- 
-def evolve_and_save(t,  uk,bk,uknew=uknew, bknew = bknew,temp_4 = temp_4): 
+def evolve_and_save(t,  uk,bk,uknew=uknew, bknew = bknew,temp_4 = temp_4,alpha = alpha): 
     global begin
     h = t[1] - t[0]
     z
@@ -798,6 +798,10 @@ def evolve_and_save(t,  uk,bk,uknew=uknew, bknew = bknew,temp_4 = temp_4):
         temp_4 = G_prod(uk,bk) + h/6.0*(G_prod(k1u,k1b) + 2*G_half_prod(k2u + k3u, k2b + k3b) + np.concatenate((k4u,k4b[None,:]),axis = 0))
         uknew[:] = temp_4[:3]
         bknew[:] = temp_4[3]
+        
+        # check_div = comm.allreduce(np.abs(1j*(kx*uknew[0] + ky *uknew[1] + kz*uknew[2])*normalize**0.5).max(),op = MPI.SUM)
+        # if rank ==0: 
+        #     print(f"max div after RK4 {check_div}")
         
         if t[i] < np.inf: fk[:],fkb[:] = forcing(t[i],uknew,bknew)
         else: fk[:],fkb[:]= 0.,0.
