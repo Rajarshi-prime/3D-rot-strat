@@ -24,7 +24,7 @@ rank = comm.Get_rank()
 ## ---------------------------------------
 
 
-N = 192
+N = 256
 dt = 0.256/N   #! Such that increasing resolution will decrease the dt
 f_corr = 1.0
 N_bs = [15,20]

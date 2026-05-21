@@ -5,6 +5,7 @@ The code forces the dimensional boussinesq equations with constant power input t
 import numpy as np 
 from scipy.fft import fft ,  ifft ,  irfft2 ,  rfft2 , irfftn ,  rfftn,   rfft,  irfft,fftfreq
 from scipy.linalg import expm
+inv = np.linalg.inv
 from mpi4py import MPI
 from time import time
 import pathlib,sys,h5py
@@ -34,7 +35,7 @@ else : isexplicit = 0.
 ## ------------- Time steps --------------
 N = 32
 dt = 0.256/N   #! Such that increasing resolution will decrease the dt
-f_corr = 1
+f_corr = float(sys.argv[-1])
 N_bs = [15,20]
 N_b = N_bs[idx]
 T = 1000 if not omg_save else 31.4/f_corr
@@ -81,12 +82,14 @@ lp = 8 # Hyperviscosity power
 nu0 = 0.59 #! Viscosity for N = 1
 # m = 1.5 #! Desired kmax*eta
 # nu = nu0*(3*m/(N*2**0.5))**(2*(lp - 1/3))  #? scaling with resolution. For 512, nu = 0.002 #! Need to add scaling for hyperviscosity
-m = [10,20,5,1,50,100,1000][int(float(sys.argv[-1]))] # Dissipation strength at the highest kmax. 
+# m = [10,20,5,1,50,100,1000][int(float(sys.argv[-1]))] # Dissipation strength at the highest kmax. 
+m = 1000 # Dissipation strength at the highest kmax. 
 nu = m/(2**0.5*N//3)**(2*lp) # Because boussinesq does not follow Kolmogorov scaling.
 
 
 
 fbyN = f_corr/N_b if N_b != 0 else 0.0
+Nbyf = N_b/f_corr if f_corr !=0 else np.inf
 einit = 0.0*TWO_PI**3 # Initial energy
 nshells = 1 # Number of consecutive shells to be forced
 #shell_no = np.arange(4,4+nshells) # the shells to be forced 
@@ -154,19 +157,97 @@ normalize = np.where((kz== 0) + (kz == N//2) , 1/(N**6/TWO_PI**3),2/(N**6/TWO_PI
 shells = np.arange(-0.5,Nf, 1.)
 shells[0] = 0.
 
+def create_G_half(G_half ,f = f_corr, Nb = N_b, alpha = alpha,invlap_press = invlap_press,dealias = dealias):
+    sig = (-(kh**2*Nb**2 +f**2 *kz**2*alpha**2 )/np.where(lap_press == 0, np.inf,  lap_press))**0.5 
 
-Lmat = (np.array([
-    [-f_corr*kx*ky*(-invlap_press),                    f_corr*(kx**2*(-invlap_press) - 1),           0*invlap_press,      alpha*kx*kz*N_b*(-invlap_press)],
-    [-f_corr*(ky**2*(-invlap_press) - 1),              f_corr*kx*ky*(-invlap_press),                 0*invlap_press,      alpha*ky*kz*N_b*(-invlap_press)],
-    [-alpha**2*f_corr*ky*kz*(-invlap_press),           alpha**2*f_corr*kx*kz*(-invlap_press),        0*invlap_press,     -alpha*N_b*(kx**2 + ky**2)*(-invlap_press)],
-    [0*invlap_press,                             0*invlap_press,                          N_b/alpha + 0*invlap_press, 0*invlap_press]
-]) + 0.0j).astype(np.complex128)
-# if rank ==0: 
-#     print(M.shape)
+    Delta_t = 0.5*dt
+    G_half += ((kh < 0.5)*(kz >0.5))[None,None,:]*np.array([
+        [np.cos(Delta_t*f)*np.ones_like(k), - np.sin(Delta_t*f)*np.ones_like(k),0*np.ones_like(k),0*np.ones_like(k)],
+        [np.sin(Delta_t*f)*np.ones_like(k),  np.cos(Delta_t*f)*np.ones_like(k),0*np.ones_like(k),0*np.ones_like(k)],
+        [0*np.ones_like(k),0*np.ones_like(k),1*np.ones_like(k),0*np.ones_like(k)],
+        [0*np.ones_like(k),0*np.ones_like(k),Nb*Delta_t/alpha*np.ones_like(k), 1*np.ones_like(k)]
+        
+    ]) #! The kh = 0 mode
+    
+    invkh = 1/np.where(kh < 0.5, np.inf,kh)
+    invkz = 1/np.where(kz < 0.5, np.inf,kz)
+    
+    G_half += ((kh > 0.5)*(kz <0.5))[None,None,:]*np.array([
+        [1- Delta_t*f*kx*ky*invkh**2,-Delta_t*f*ky**2*invkh**2,0*np.ones_like(k),0*np.ones_like(k)],
+        [Delta_t*f*kx**2*invkh**2, 1+ Delta_t*f*kx*ky*invkh**2,0*np.ones_like(k),0*np.ones_like(k)],
+        [0*np.ones_like(k),0*np.ones_like(k),np.cos(Delta_t*Nb)*np.ones_like(k),-alpha*np.sin(Delta_t*Nb)*np.ones_like(k)],
+        [0*np.ones_like(k),0*np.ones_like(k),np.sin(Delta_t*Nb)/alpha*np.ones_like(k),np.cos(Delta_t*Nb)*np.ones_like(k)]
+        
+        
+    ]) #! The kz = 0 mode
+    
+    
+    
+    G_half += ((kh < 0.5)*(kz <0.5))[None,None,:]*np.array([
+        [np.cos(Delta_t*f)*np.ones_like(k), - np.sin(Delta_t*f)*np.ones_like(k),0*np.ones_like(k),0*np.ones_like(k)],
+        [np.sin(Delta_t*f)*np.ones_like(k),   np.cos(Delta_t*f)*np.ones_like(k),0*np.ones_like(k),0*np.ones_like(k)],
+        [0*np.ones_like(k),0*np.ones_like(k),np.cos(Delta_t*Nb)*np.ones_like(k),-alpha*np.sin(Delta_t*Nb)*np.ones_like(k)],
+        [0*np.ones_like(k),0*np.ones_like(k),np.sin(Delta_t*Nb)/alpha*np.ones_like(k),np.cos(Delta_t*Nb)*np.ones_like(k)]
+        
+    ]) #! The kz = 0, kh = 0 mode
+    
+    if f == 0.0 and Nb>0.0:
+        kappa = kh*(-invlap_press)**0.5
+        G_half += np.array([
+            [1*np.ones_like(k),0*np.ones_like(k),kx*kz*invkh**2*(1- np.cos(Delta_t*Nb*kappa)),alpha*kx*kz*kappa*invkh**2*np.sin(Delta_t*Nb*kappa)],
+            [0*np.ones_like(k),1*np.ones_like(k),ky*kz*invkh**2*(1- np.cos(Delta_t*Nb*kappa)),alpha*ky*kz*kappa*invkh**2*np.sin(Delta_t*Nb*kappa)],
+            [0*np.ones_like(k),0*np.ones_like(k),np.cos(Delta_t*Nb*kappa),-alpha*kappa*np.sin(Delta_t*Nb*kappa)],
+            [0*np.ones_like(k),0*np.ones_like(k),np.sin(Delta_t*Nb*kappa)/(alpha*np.where(kappa ==0.0, np.inf,kappa)),np.cos(Delta_t*Nb*kappa)]
+        ]) 
+        del kappa
+        
+    elif Nb == 0.0 and Nb>0.0:
+        gamma = alpha*kz*(-invlap_press)**0.5
+        G_half += np.array([
+            [np.cos(gamma*Delta_t*f) - kx*ky*gamma*(invkz/alpha)**2*np.sin(gamma*Delta_t*f),-(ky**2 + alpha**2*kz**2)*gamma*(invkz/alpha)**2*np.sin(gamma*Delta_t*f),0*np.ones_like(k),0*np.ones_like(k)],
+            [(kx**2 + alpha**2*kz**2)*gamma*(invkz/alpha)**2*np.sin(gamma*Delta_t*f),np.cos(gamma*Delta_t*f) + kx*ky*gamma*(invkz/alpha)**2*np.sin(gamma*Delta_t*f),0*np.ones_like(k),0*np.ones_like(k)],
+            [(kx*(1-np.cos(gamma*Delta_t*f)) - gamma*ky*np.sin(gamma*Delta_t*f))*invkz,(gamma*kx*np.sin(gamma*Delta_t*f) + ky*(1- np.cos(gamma*Delta_t*f)))*invkz,0*np.ones_like(k),0*np.ones_like(k)],
+            [0*np.ones_like(k),0*np.ones_like(k),0*np.ones_like(k),1*np.ones_like(k)]
+        ])
+        del gamma
+    elif f> 0.0 and Nb > 0.0:
+        denom = np.where(f**2 * kx**2 + sig**2*ky**2 == 0.0,np.inf, f**2 * kx**2 + sig**2*ky**2)
+        Sm = np.array([
+            [-ky*Nb*invkz/(alpha*f),kx*Nb*invkz/(alpha*f**2),alpha*kz*(f*ky + 1j*kx*sig)*invkh**2/Nb, alpha*kz*(f*ky - 1j*kx*sig)*invkh**2/Nb],
+            [kx*Nb*invkz/(alpha*f),ky*N*invkz/(alpha*f**2),-alpha*kz*(f**2*(kx**2 + alpha**2 *kz**2) + ky**2*Nb**2)*(-invlap_press)*(f*kx - 1j*ky*sig)/(Nb*denom),-alpha*kz*(f**2*(kx**2 + alpha**2 *kz**2) + ky**2*Nb**2)*(-invlap_press)*(f*kx + 1j*ky*sig)/(Nb*denom)],
+            [0*np.ones_like(k),alpha/Nb*np.ones_like(k),-1j*alpha*sig/Nb,1j*alpha*sig/Nb],
+            [1*np.ones_like(k),0*np.ones_like(k),1*np.ones_like(k),1*np.ones_like(k)]
+        ]) +((kh<0.5)+(kz<0.5))[None, None,:]*np.identity((4))[...,None,None,None]
+        
+        # det = np.linalg.det(np.moveaxis(Sm,[0,1,2,3,4],[3,4,0,1,2]))
+        # print((det ==0.0).sum(),((kh<0.5)+(kz<0.5)).sum())
+        # raise SystemExit
+        G_half += ((kh>0.5)*(kz>0.5))[None,None,...]*np.einsum('ij...,jk...->ik...',np.einsum('ij...,jk...->ik...',Sm,np.array([
+            [1*np.ones_like(k),Delta_t*np.ones_like(k),0*np.ones_like(k),0*np.ones_like(k)],
+            [0*np.ones_like(k),1*np.ones_like(k),0*np.ones_like(k),0*np.ones_like(k)],
+            [0*np.ones_like(k),0*np.ones_like(k),np.exp(-1j*sig*Delta_t),0*np.ones_like(k)],
+            [0*np.ones_like(k),0*np.ones_like(k),0*np.ones_like(k),np.exp(1j*sig*Delta_t)]
+        ])),np.moveaxis(inv(np.moveaxis(Sm,[0,1,2,3,4],[3,4,0,1,2])),[0,1,2,3,4],[2,3,4,0,1]))
+        
+        
+        del Sm,denom
+
+    else:
+        G_half += 1.0 + 0j
+    
+    del invkh,invkz,sig 
+    return G_half*dealias[None,None,:]
+
+
+G_half = 0.0*np.ones((4,4,N,Np,Nf),dtype = np.complex128)
+
+G_half = create_G_half(G_half)
+# # print(np.abs(eigL.imag).min())
+# r1,r2,r3 = np.random.randint(0,N),  np.random.randint(0,Np), np.random.randint(0,Nf)
+# eigG_half = np.linalg.eigvals(np.moveaxis(G_half,[0,1,2,3,4],[3,4,0,1,2]))
+# print(np.abs(G_half.real).max(),eigG_half[r1,r2,r3],(r1,r2,r3),np.min(np.linalg.norm(eigG_half,axis = -1)))
 # raise SystemExit
-# G = np.moveaxis(expm(np.moveaxis(M,[0,1,2,3,4],[3,4,0,1,2])),[0,1,2,3,4],[2,3,4,0,1])
-G_half = np.moveaxis(expm(dt*np.moveaxis(Lmat,[0,1,2,3,4],[3,4,0,1,2])/2.0),[0,1,2,3,4],[2,3,4,0,1])
-del Lmat
+# del Lmat
 # check_G = np.einsum('ij...,jk...-> ik...',G_half,G_half)
 # maxerror = comm.allreduce(np.abs(G).max(),op = MPI.MAX)
 # if rank ==0: 
@@ -459,17 +540,12 @@ def forcing(tt,uk,bk,f0 = f0*nshells,cond = cond ,h = dt,theta= theta,pk = pk,f1
         fk[:] = beta*f1uk  
         fkb[:] = beta*f1bk 
         
-    # alpha = (2.0*f0/comm.allreduce(np.sum(normalize*(np.einsum('i...,i...->...',np.conjugate(fk),fk) + np.conjugate(fkb)*fkb).real),op = MPI.SUM)/h)**0.5
-    alpha = (2.0*f0/inner_product_k(fk,fkb, fk,fkb)/h)**0.5
+    # aa = (2.0*f0/comm.allreduce(np.sum(normalize*(np.einsum('i...,i...->...',np.conjugate(fk),fk) + np.conjugate(fkb)*fkb).real),op = MPI.SUM)/h)**0.5
+    aa = (2.0*f0/inner_product_k(fk,fkb, fk,fkb)/h)**0.5
 
     
     
-    return alpha*fk, alpha*fkb    
-
-
-
-
-
+    return aa*fk, aa*fkb    
 
 
 
@@ -614,6 +690,12 @@ def load_npz(paths,uk,bk):
     
 
 
+def add_group(file,group_name):
+    if group_name not in file:
+        file.create_group(group_name)
+def add_dataset(file, dataset_name):
+    if dataset_name not in file:
+        f["/energy_timeseries/"].create_dataset("tot_energy" ,data = np.array([np.sum(ek_arr)]),maxshape = (None,),chunks = True)
 
 
 def save(i,uk,bk,alpha = alpha):
@@ -667,7 +749,8 @@ def save(i,uk,bk,alpha = alpha):
     
     np.savez_compressed(f"{new_dir}/Fields_k_{rank}",uk = uk[0],vk = uk[1],wk = uk[2],bk = bk)
     if rank ==0: 
-        with h5py.File(new_dir/'spectra_flux.hdf5', 'w') as f:
+        if omg_save: new_dir = new_dir.parent
+        with h5py.File(new_dir/'spectra_flux.hdf5', 'a') as f:
             if 'Energy_Spectra' not in f:
                 f.create_group('Energy_Spectra')
             if 'Flux_Spectra' not in f:
@@ -683,26 +766,26 @@ def save(i,uk,bk,alpha = alpha):
             if 'energy_timeseries' not in f:
                 f.create_group('energy_timeseries')
             if "tot_energy" not in f["/energy_timeseries/"]:
-                f["/energy_timeseries/"].create_dataset("tot_energy" ,data = np.array([np.sum(ek_arr)]),maxshape = (None),chunks = True)
+                f["/energy_timeseries/"].create_dataset("tot_energy" ,data = np.array([np.sum(ek_arr)]),maxshape = (None,),chunks = True)
             else:
-                f["/energy_timeseries/tot_energy"].resize(f["/energy_timeseries/tot_energy"].shape[0] + 1)
+                f["/energy_timeseries/tot_energy"].resize((f["/energy_timeseries/tot_energy"].shape[0] + 1,))
                 f["/energy_timeseries/tot_energy"][-1] = np.sum(ek_arr)
             if "bal_energy" not in f["/energy_timeseries/"]:
-                f["/energy_timeseries/"].create_dataset("bal_energy",data = np.array([ek_v_val]),maxshape = (None),chunks = True)
+                f["/energy_timeseries/"].create_dataset("bal_energy",data = np.array([ek_v_val]),maxshape = (None,),chunks = True)
             else:
-                f["/energy_timeseries/bal_energy"].resize(f["/energy_timeseries/bal_energy"].shape[0] + 1)
+                f["/energy_timeseries/bal_energy"].resize((f["/energy_timeseries/bal_energy"].shape[0] + 1,))
                 f["/energy_timeseries/bal_energy"][-1] = ek_v_val
             if "ubal_energy" not in f["/energy_timeseries/"]:
 
-                f["/energy_timeseries/"].create_dataset("ubal_energy",data = np.array([ek_w_val]),maxshape = (None),chunks = True)
+                f["/energy_timeseries/"].create_dataset("ubal_energy",data = np.array([ek_w_val]),maxshape = (None,),chunks = True)
             else:    
-                f["/energy_timeseries/ubal_energy"].resize(f["/energy_timeseries/ubal_energy"].shape[0] + 1)
+                f["/energy_timeseries/ubal_energy"].resize((f["/energy_timeseries/ubal_energy"].shape[0] + 1,))
                 f["/energy_timeseries/ubal_energy"][-1] = ek_w_val
                 
             if 'zeta_rms_timeseries' not in f:
-                f.create_dataset('zeta_rms_timeseries',data = np.array([zeta_rms]),maxshape = (None),chunks = True)
+                f.create_dataset('zeta_rms_timeseries',data = np.array([zeta_rms]),maxshape = (None,),chunks = True)
             else:                 
-                f['zeta_rms_timeseries'].resize(f["zeta_rms_timeseries"].shape[0] + 1)
+                f['zeta_rms_timeseries'].resize((f["zeta_rms_timeseries"].shape[0] + 1,))
                 f['zeta_rms_timeseries'][-1] = zeta_rms
                 
                 
@@ -755,14 +838,13 @@ def save(i,uk,bk,alpha = alpha):
 def evolve_and_save(t,  uk,bk,uknew=uknew, bknew = bknew,temp_4 = temp_4,alpha = alpha): 
     global begin
     h = t[1] - t[0]
-    z
     if viscosity_integrator == "implicit": hypervisc= dealias*(1. + h*vis)**(-1)
     else: hypervisc = 1.
     
-    if  viscosity_integrator == "exponential": 
-        semi_G =  np.exp(-nu*(k**(2*lp))*h)
-        semi_G_half =  semi_G**0.5
-    else: semi_G = semi_G_half = 1.
+    # if  viscosity_integrator == "exponential": 
+    #     semi_G =  np.exp(-nu*(k**(2*lp))*h)
+    #     semi_G_half =  semi_G**0.5
+    # else: semi_G = semi_G_half = 1.
     
     t3  = time()
     calc_time = 0
@@ -795,7 +877,7 @@ def evolve_and_save(t,  uk,bk,uknew=uknew, bknew = bknew,temp_4 = temp_4,alpha =
         # uknew[:] = uk + h/2.0* ( k1u + k2u )  
         # uknew[:] = (semi_G*uk + h/6.0* ( semi_G*k1u + 2*semi_G_half*(k2u + k3u) + k4u)  )*hypervisc 
         # bknew[:] = (semi_G*bk + h/6.0* ( semi_G*k1b + 2*semi_G_half*(k2b + k3b) + k4b)  )*hypervisc 
-        temp_4 = G_prod(uk,bk) + h/6.0*(G_prod(k1u,k1b) + 2*G_half_prod(k2u + k3u, k2b + k3b) + np.concatenate((k4u,k4b[None,:]),axis = 0))
+        temp_4 = hypervisc[None,:]*(G_prod(uk,bk) + h/6.0*(G_prod(k1u,k1b) + 2*G_half_prod(k2u + k3u, k2b + k3b) + np.concatenate((k4u,k4b[None,:]),axis = 0)))
         uknew[:] = temp_4[:3]
         bknew[:] = temp_4[3]
         
@@ -805,8 +887,18 @@ def evolve_and_save(t,  uk,bk,uknew=uknew, bknew = bknew,temp_4 = temp_4,alpha =
         
         if t[i] < np.inf: fk[:],fkb[:] = forcing(t[i],uknew,bknew)
         else: fk[:],fkb[:]= 0.,0.
-        uknew += fk*h*dealias 
-        bknew += fkb*h*dealias
+        
+        # corr = inner_product_k(uknew,bknew,fk,fkb)
+        # feng = inner_product_k(fk,fkb,fk,fkb)*0.5*h
+        # if rank ==0: print(f"Energy injected : {feng}, correlation :{corr}, alpha = {alpha}")
+        
+        # uk_v[:], bk_v[:] = vortex(fk,fkb)
+        # feng = inner_product_k(uk_v,bk_v,bk_v,bk_v)*0.5
+        # if rank ==0: print(f"Balance forcing energy {feng}")
+        
+        
+        uknew[:] = (uknew  + fk*h*dealias )
+        bknew[:] = (bknew  + fkb*h*dealias)
         # uknew[:] = (semi_G*uk + h/6.0* ( semi_G*k1u + 2*semi_G_half*(k2u + k3u) + k4u)  + h*fk)*hypervisc
         # uknew[:] = (uknew + h*fk)
         

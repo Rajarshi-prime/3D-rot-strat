@@ -33,7 +33,7 @@ else : isexplicit = 0.
 ## ------------- Time steps --------------
 N = 192
 dt = 0.256/N   #! Such that increasing resolution will decrease the dt
-f_corr = 1.0
+f_corr = 5.0
 N_bs = [15,10]
 N_b = N_bs[idx]
 T = 1000 if not omg_save else 31.4/f_corr
@@ -603,6 +603,8 @@ def save(i,uk,bk):
     u[1] = irfft_mpi(uk[1], u[1])
     u[2] = irfft_mpi(uk[2], u[2])
     b[:] = irfft_mpi(bk, b)
+    omg[2] = irfft_mpi(1j*(kx*uk[1] - ky*uk[0])*dealias,omg[2])
+    zeta_rms = (comm.allreduce(np.sum(omg[2]**2), op =MPI.SUM )/N**3)**0.5
     # ----------- ----------------------------
     #                 Saving the data (field)
     # ----------- ----------------------------
@@ -616,7 +618,7 @@ def save(i,uk,bk):
     
     np.savez_compressed(f"{new_dir}/Fields_k_{rank}",uk = uk[0],vk = uk[1],wk = uk[2],bk = bk)
     if rank ==0: 
-        with h5py.File(new_dir/'spectra_flux.hdf5', 'w') as f:
+        with h5py.File(new_dir/'spectra_flux.hdf5', 'a') as f:
             if 'Energy_Spectra' not in f:
                 f.create_group('Energy_Spectra')
             if 'Flux_Spectra' not in f:
@@ -632,21 +634,27 @@ def save(i,uk,bk):
             if 'energy_timeseries' not in f:
                 f.create_group('energy_timeseries')
             if "tot_energy" not in f["/energy_timeseries/"]:
-                f["/energy_timeseries/"].create_dataset("tot_energy" ,data = np.array([np.sum(ek_arr)]),maxshape = (None),chunks = True)
+                f["/energy_timeseries/"].create_dataset("tot_energy" ,data = np.array([np.sum(ek_arr)]),maxshape = (None,),chunks = True)
             else:
-                f["/energy_timeseries/tot_energy"].resize(f["/energy_timeseries/tot_energy"].shape[0] + 1)
+                f["/energy_timeseries/tot_energy"].resize((f["/energy_timeseries/tot_energy"].shape[0] + 1,))
                 f["/energy_timeseries/tot_energy"][-1] = np.sum(ek_arr)
             if "bal_energy" not in f["/energy_timeseries/"]:
-                f["/energy_timeseries/"].create_dataset("bal_energy",data = np.array([ek_v_val]),maxshape = (None),chunks = True)
+                f["/energy_timeseries/"].create_dataset("bal_energy",data = np.array([ek_v_val]),maxshape = (None,),chunks = True)
             else:
-                f["/energy_timeseries/bal_energy"].resize(f["/energy_timeseries/bal_energy"].shape[0] + 1)
+                f["/energy_timeseries/bal_energy"].resize((f["/energy_timeseries/bal_energy"].shape[0] + 1,))
                 f["/energy_timeseries/bal_energy"][-1] = ek_v_val
             if "ubal_energy" not in f["/energy_timeseries/"]:
 
-                f["/energy_timeseries/"].create_dataset("ubal_energy",data = np.array([ek_w_val]),maxshape = (None),chunks = True)
+                f["/energy_timeseries/"].create_dataset("ubal_energy",data = np.array([ek_w_val]),maxshape = (None,),chunks = True)
             else:    
-                f["/energy_timeseries/ubal_energy"].resize(f["/energy_timeseries/ubal_energy"].shape[0] + 1)
+                f["/energy_timeseries/ubal_energy"].resize((f["/energy_timeseries/ubal_energy"].shape[0] + 1,))
                 f["/energy_timeseries/ubal_energy"][-1] = ek_w_val
+                
+            if 'zeta_rms_timeseries' not in f:
+                f.create_dataset('zeta_rms_timeseries',data = np.array([zeta_rms]),maxshape = (None,),chunks = True)
+            else:                 
+                f['zeta_rms_timeseries'].resize((f["zeta_rms_timeseries"].shape[0] + 1,))
+                f['zeta_rms_timeseries'][-1] = zeta_rms
                 
                 
             try: f[f"Energy_Spectra/time_{t[i]:.3f}"][...] = ek_arr
@@ -662,8 +670,7 @@ def save(i,uk,bk):
             try: f[f"Ver_Energy_Spectra/time_{t[i]:.3f}"][...] = ekz_arr
             except KeyError: f[f"Ver_Energy_Spectra/time_{t[i]:.3f}"] = ekz_arr
             try : f[f"Ver_Flux_Spectra/time_{t[i]:.3f}"][...]=  Pikz_arr
-            except KeyError: f[f"Ver_Flux_Spectra/time_{t[i]:.3f}"]=  Pikz_arr
-            
+            except KeyError: f[f"Ver_Flux_Spectra/time_{t[i]:.3f}"]=  Pikz_arr        
             
     # np.savez_compressed(f"{new_dir}/Energy_spectrum",ek = ek_arr)
     # np.savez_compressed(f"{new_dir}/Flux_spectrum",Pik = Pik_arr)
