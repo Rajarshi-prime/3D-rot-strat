@@ -33,7 +33,7 @@ N_b = N_bs[idx]
 T = 1000 if not omg_save else 31.4/f_corr
 dt_save = 1.0 if not omg_save else round(2/N_b,int(np.log10(N_b)))
 st = round(dt_save/dt)
-
+saveint = int(np.log10(1/dt_save))
 ## --------- Loading from the parameters file -----------
 # param["num_process"] = num_process
 ## -------------------------------------------------------
@@ -179,8 +179,8 @@ for jj,time in enumerate(times_o):
     # if rank ==0 : print(f"Loading for time {time:.2f}: Done!")
     
     
-    ukt[jj],bkt[jj] = load_npz(loadPath/f"time_{time:.3f}",ukt[jj],bkt[jj])
-    if rank ==0 : print(f"Loading for time {time:.3f}: Done!")
+    ukt[jj],bkt[jj] = load_npz(loadPath/f"time_{time:.{saveint}f}",ukt[jj],bkt[jj])
+    if rank ==0 : print(f"Loading for time {time:.{saveint}f}: Done!")
 
 # ent = dx*dy*dz*comm.allreduce(np.sum(bkt**2),op = MPI.SUM)
 if rank ==0: print(f"ukt shape = {ukt.shape}")

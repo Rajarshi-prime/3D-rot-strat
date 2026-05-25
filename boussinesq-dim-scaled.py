@@ -16,9 +16,12 @@ if int(float(sys.argv[-1])) == 0:
 elif int(float(sys.argv[-1])) == 1: 
     forcestart = False
     omg_save = True
-else: 
+elif int(float(sys.argv[-1])) == 2: 
     forcestart = True
     omg_save = True
+else : 
+    forcestart = False
+    omg_save = False
     
 
 # idx = int(float(sys.argv[-1]))
@@ -47,9 +50,11 @@ dt = 0.256/N   #! Such that increasing resolution will decrease the dt
 f_corr = float(sys.argv[-2])
 N_bs = [15,200]
 N_b = N_bs[idx]
-T = 200 if not omg_save else 31.4/f_corr
+T = 50 if not omg_save else 31.4/f_corr
 dt_save = 1.0 if not omg_save else round(2/N_b,int(np.log10(N_b)))
+saveint = int(np.log10(1/dt_save))
 st = round(dt_save/dt)
+
 
 ## ---------------------------------------
 #%%
@@ -707,7 +712,7 @@ def add_dataset(file, dataset_name):
         f["/energy_timeseries/"].create_dataset("tot_energy" ,data = np.array([np.sum(ek_arr)]),maxshape = (None,),chunks = True)
 
 
-def save(i,uk,bk,alpha = alpha):
+def save(i,uk,bk,alpha = alpha,saveint = saveint):
     global ek,k1u,k1b,ek_arr,Pik,Pik_arr
     
     k1u[:],k1b[:] = RHS(uk,bk, k1u,k1b,visc = 0,forc = 0)
@@ -749,7 +754,7 @@ def save(i,uk,bk,alpha = alpha):
     #                 Saving the data (field)
     # ----------- ----------------------------
     # new_dir = savePath/f"time_{t[i]:.1f}"
-    new_dir = savePath/f"time_{t[i]:.3f}" if omg_save else savePath/f"last"
+    new_dir = savePath/f"time_{t[i]:.{saveint}f}" if omg_save else savePath/f"last"
     try: new_dir.mkdir(parents=True,  exist_ok=True)
     except FileExistsError: pass
     comm.Barrier()
@@ -798,20 +803,20 @@ def save(i,uk,bk,alpha = alpha):
                 f['zeta_rms_timeseries'][-1] = zeta_rms
                 
                 
-            try: f[f"Energy_Spectra/time_{t[i]:.3f}"][...] = ek_arr
-            except KeyError: f[f"Energy_Spectra/time_{t[i]:.3f}"] = ek_arr
-            try : f[f"Flux_Spectra/time_{t[i]:.3f}"][...]=  Pik_arr
-            except KeyError: f[f"Flux_Spectra/time_{t[i]:.3f}"]=  Pik_arr
+            try: f[f"Energy_Spectra/time_{t[i]:.{saveint}f}"][...] = ek_arr
+            except KeyError: f[f"Energy_Spectra/time_{t[i]:.{saveint}f}"] = ek_arr
+            try : f[f"Flux_Spectra/time_{t[i]:.{saveint}f}"][...]=  Pik_arr
+            except KeyError: f[f"Flux_Spectra/time_{t[i]:.{saveint}f}"]=  Pik_arr
             
-            try: f[f"Hor_Energy_Spectra/time_{t[i]:.3f}"][...] = ekh_arr
-            except KeyError: f[f"Hor_Energy_Spectra/time_{t[i]:.3f}"] = ekh_arr
-            try : f[f"Hor_Flux_Spectra/time_{t[i]:.3f}"][...]=  Pikh_arr
-            except KeyError: f[f"Hor_Flux_Spectra/time_{t[i]:.3f}"]=  Pikh_arr
+            try: f[f"Hor_Energy_Spectra/time_{t[i]:.{saveint}f}"][...] = ekh_arr
+            except KeyError: f[f"Hor_Energy_Spectra/time_{t[i]:.{saveint}f}"] = ekh_arr
+            try : f[f"Hor_Flux_Spectra/time_{t[i]:.{saveint}f}"][...]=  Pikh_arr
+            except KeyError: f[f"Hor_Flux_Spectra/time_{t[i]:.{saveint}f}"]=  Pikh_arr
             
-            try: f[f"Ver_Energy_Spectra/time_{t[i]:.3f}"][...] = ekz_arr
-            except KeyError: f[f"Ver_Energy_Spectra/time_{t[i]:.3f}"] = ekz_arr
-            try : f[f"Ver_Flux_Spectra/time_{t[i]:.3f}"][...]=  Pikz_arr
-            except KeyError: f[f"Ver_Flux_Spectra/time_{t[i]:.3f}"]=  Pikz_arr
+            try: f[f"Ver_Energy_Spectra/time_{t[i]:.{saveint}f}"][...] = ekz_arr
+            except KeyError: f[f"Ver_Energy_Spectra/time_{t[i]:.{saveint}f}"] = ekz_arr
+            try : f[f"Ver_Flux_Spectra/time_{t[i]:.{saveint}f}"][...]=  Pikz_arr
+            except KeyError: f[f"Ver_Flux_Spectra/time_{t[i]:.{saveint}f}"]=  Pikz_arr
             
             
     # np.savez_compressed(f"{new_dir}/Energy_spectrum",ek = ek_arr)
@@ -844,7 +849,7 @@ def save(i,uk,bk,alpha = alpha):
 ## -------------------------------------------------    
     
 ## ------------- Evolving the system ----------------- 
-def evolve_and_save(t,  uk,bk,uknew=uknew, bknew = bknew,temp_4 = temp_4,alpha = alpha): 
+def evolve_and_save(t,  uk,bk,uknew=uknew, bknew = bknew,temp_4 = temp_4,alpha = alpha,dt_save = dt_save): 
     global begin
     h = t[1] - t[0]
     if viscosity_integrator == "implicit": hypervisc= dealias*(1. + h*vis)**(-1)
@@ -861,7 +866,7 @@ def evolve_and_save(t,  uk,bk,uknew=uknew, bknew = bknew,temp_4 = temp_4,alpha =
         calc_time += time() - t3
         if rank == 0:  print(f"step {i} in time {time() - t3}", end= '\r',file = sys.stderr)
         ## ------------- saving the data -------------------- ##
-        if i % st ==0 :
+        if abs(np.sin(t[i]/dt_save*PI))<= np.sin(0.5*h/dt_save*PI):
         #     save_hdf5(i,uk,bk)
             save(i,uk,bk)
         begin = True   
