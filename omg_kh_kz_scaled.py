@@ -24,13 +24,14 @@ rank = comm.Get_rank()
 ## ---------------------------------------
 
 
-N = 256
+N = 192
 dt = 0.256/N   #! Such that increasing resolution will decrease the dt
-f_corr = 1.0
-N_bs = [15,20]
+# f_corr = 1.0
+f_corr = float(sys.argv[-1])
+N_bs = [15,200]
 N_b = N_bs[idx]
 T = 1000 if not omg_save else 31.4/f_corr
-dt_save = 1.0 if not omg_save else 0.1/f_corr
+dt_save = 1.0 if not omg_save else round(2/N_b,int(np.log10(N_b)))
 st = round(dt_save/dt)
 
 ## --------- Loading from the parameters file -----------
@@ -73,7 +74,8 @@ lp = 8 # Hyperviscosity power
 nu0 = 0.59 #! Viscosity for N = 1
 # m = 1.5 #! Desired kmax*eta
 # nu = nu0*(3*m/(N*2**0.5))**(2*(lp - 1/3))  #? scaling with resolution. For 512, nu = 0.002 #! Need to add scaling for hyperviscosity
-m = [10,20,5,1,50,100,1000][int(float(sys.argv[-1]))] # Dissipation strength at the highest kmax. 
+# m = [10,20,5,1,50,100,1000][int(float(sys.argv[-1]))] # Dissipation strength at the highest kmax. 
+m = 1000
 nu = m/(2**0.5*N//3)**(2*lp) # Because boussinesq does not follow Kolmogorov scaling.
 
 

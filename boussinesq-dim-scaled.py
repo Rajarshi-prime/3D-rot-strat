@@ -10,8 +10,17 @@ from mpi4py import MPI
 from time import time
 import pathlib,sys,h5py
 curr_path = pathlib.Path(__file__).parent
-forcestart = True
-omg_save = False
+if int(float(sys.argv[-1])) == 0:
+    forcestart = True
+    omg_save = False
+elif int(float(sys.argv[-1])) == 1: 
+    forcestart = False
+    omg_save = True
+else: 
+    forcestart = True
+    omg_save = True
+    
+
 # idx = int(float(sys.argv[-1]))
 idx = 1
 # forcestart = bool(float(sys.argv[-1]))
@@ -22,7 +31,7 @@ comm = MPI.COMM_WORLD
 num_process =  comm.Get_size()
 rank = comm.Get_rank()
 #%%
-
+if rank ==0: print(f"Forcestart:{forcestart}, omg_save :{omg_save}")
 isforcing = True
 viscosity_integrator = "implicit" 
 # viscosity_integrator = "explicit" #! Do not use this for hyperviscous simulations or cases with high resolution simulations.
@@ -33,13 +42,13 @@ else : isexplicit = 0.
 #%%
 
 ## ------------- Time steps --------------
-N = 32
+N = 192
 dt = 0.256/N   #! Such that increasing resolution will decrease the dt
-f_corr = float(sys.argv[-1])
-N_bs = [15,20]
+f_corr = float(sys.argv[-2])
+N_bs = [15,200]
 N_b = N_bs[idx]
-T = 1000 if not omg_save else 31.4/f_corr
-dt_save = 1.0 if not omg_save else 0.1/f_corr
+T = 200 if not omg_save else 31.4/f_corr
+dt_save = 1.0 if not omg_save else round(2/N_b,int(np.log10(N_b)))
 st = round(dt_save/dt)
 
 ## ---------------------------------------
@@ -97,7 +106,7 @@ nshells = 1 # Number of consecutive shells to be forced
 
 #----  Kolmogorov length scale - \eta \epsilon etc...---------
 
-f0 = (nu0)**3*TWO_PI**3/ nshells #! Total power input at each shells
+f0 = 0.1*(nu0)**3*TWO_PI**3/ nshells #! Total power input at each shells
 
 # f0 = 0.02 /(N_b**2)*nshells#! Total power input at each shells
 re = np.inf if nu==0 else 1/nu
@@ -714,10 +723,10 @@ def save(i,uk,bk,alpha = alpha):
     Pik_arr[:] = np.cumsum(Pik_arr[::-1])[::-1]
     
     Pikh_arr[:] = comm.allreduce(e3d_to_e1d(Pik,kh),op = MPI.SUM)
-    Pikh_arr[:] = np.cumsum(Pik_arr[::-1])[::-1]
+    Pikh_arr[:] = np.cumsum(Pikh_arr[::-1])[::-1]
     
     Pikz_arr[:] = comm.allreduce(e3d_to_e1d(Pik,kz),op = MPI.SUM)
-    Pikz_arr[:] = np.cumsum(Pik_arr[::-1])[::-1]
+    Pikz_arr[:] = np.cumsum(Pikz_arr[::-1])[::-1]
     
     
     
