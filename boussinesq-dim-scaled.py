@@ -45,12 +45,12 @@ else : isexplicit = 0.
 #%%
 
 ## ------------- Time steps --------------
-N = 192
+N = 128
 dt = 0.256/N   #! Such that increasing resolution will decrease the dt
 f_corr = float(sys.argv[-2])
-N_bs = [15,200]
-N_b = N_bs[idx]
-T = 50 if not omg_save else 31.4/f_corr
+# N_bs = [15,200]
+N_b = float(sys.argv[-3])
+T = 120 if not omg_save else 31.4/f_corr
 dt_save = 1.0 if not omg_save else round(2/N_b,int(np.log10(N_b)))
 saveint = int(np.log10(1/dt_save))
 st = round(dt_save/dt)
@@ -174,7 +174,7 @@ shells[0] = 0.
 def create_G_half(G_half ,f = f_corr, Nb = N_b, alpha = alpha,invlap_press = invlap_press,dealias = dealias):
     sig = (-(kh**2*Nb**2 +f**2 *kz**2*alpha**2 )/np.where(lap_press == 0, np.inf,  lap_press))**0.5 
 
-    Delta_t = 0.5*dt
+    Delta_t = -0.5*dt
     G_half += ((kh < 0.5)*(kz >0.5))[None,None,:]*np.array([
         [np.cos(Delta_t*f)*np.ones_like(k), - np.sin(Delta_t*f)*np.ones_like(k),0*np.ones_like(k),0*np.ones_like(k)],
         [np.sin(Delta_t*f)*np.ones_like(k),  np.cos(Delta_t*f)*np.ones_like(k),0*np.ones_like(k),0*np.ones_like(k)],
@@ -206,8 +206,10 @@ def create_G_half(G_half ,f = f_corr, Nb = N_b, alpha = alpha,invlap_press = inv
     ]) #! The kz = 0, kh = 0 mode
     
     if f == 0.0 and Nb>0.0:
+        if rank ==0: print(f'Creating G_half for zero f and non-zero Nb')
+        
         kappa = kh*(-invlap_press)**0.5
-        G_half += np.array([
+        G_half += ((kh>0.5)*(kz>0.5))[None,None,...]*np.array([
             [1*np.ones_like(k),0*np.ones_like(k),kx*kz*invkh**2*(1- np.cos(Delta_t*Nb*kappa)),alpha*kx*kz*kappa*invkh**2*np.sin(Delta_t*Nb*kappa)],
             [0*np.ones_like(k),1*np.ones_like(k),ky*kz*invkh**2*(1- np.cos(Delta_t*Nb*kappa)),alpha*ky*kz*kappa*invkh**2*np.sin(Delta_t*Nb*kappa)],
             [0*np.ones_like(k),0*np.ones_like(k),np.cos(Delta_t*Nb*kappa),-alpha*kappa*np.sin(Delta_t*Nb*kappa)],
@@ -215,16 +217,20 @@ def create_G_half(G_half ,f = f_corr, Nb = N_b, alpha = alpha,invlap_press = inv
         ]) 
         del kappa
         
-    elif Nb == 0.0 and Nb>0.0:
+    elif Nb == 0.0 and f>0.0:
+        if rank ==0: print(f'Creating G_half for non-zero f and zero Nb')
+        
         gamma = alpha*kz*(-invlap_press)**0.5
-        G_half += np.array([
+        G_half += ((kh>0.5)*(kz>0.5))[None,None,...]*np.array([
             [np.cos(gamma*Delta_t*f) - kx*ky*gamma*(invkz/alpha)**2*np.sin(gamma*Delta_t*f),-(ky**2 + alpha**2*kz**2)*gamma*(invkz/alpha)**2*np.sin(gamma*Delta_t*f),0*np.ones_like(k),0*np.ones_like(k)],
             [(kx**2 + alpha**2*kz**2)*gamma*(invkz/alpha)**2*np.sin(gamma*Delta_t*f),np.cos(gamma*Delta_t*f) + kx*ky*gamma*(invkz/alpha)**2*np.sin(gamma*Delta_t*f),0*np.ones_like(k),0*np.ones_like(k)],
             [(kx*(1-np.cos(gamma*Delta_t*f)) - gamma*ky*np.sin(gamma*Delta_t*f))*invkz,(gamma*kx*np.sin(gamma*Delta_t*f) + ky*(1- np.cos(gamma*Delta_t*f)))*invkz,0*np.ones_like(k),0*np.ones_like(k)],
             [0*np.ones_like(k),0*np.ones_like(k),0*np.ones_like(k),1*np.ones_like(k)]
         ])
         del gamma
+        
     elif f> 0.0 and Nb > 0.0:
+        if rank ==0: print(f'Creating G_half for non-zero f and Nb')
         denom = np.where(f**2 * kx**2 + sig**2*ky**2 == 0.0,np.inf, f**2 * kx**2 + sig**2*ky**2)
         Sm = np.array([
             [-ky*Nb*invkz/(alpha*f),kx*Nb*invkz/(alpha*f**2),alpha*kz*(f*ky + 1j*kx*sig)*invkh**2/Nb, alpha*kz*(f*ky - 1j*kx*sig)*invkh**2/Nb],
@@ -247,7 +253,9 @@ def create_G_half(G_half ,f = f_corr, Nb = N_b, alpha = alpha,invlap_press = inv
         del Sm,denom
 
     else:
-        G_half += 1.0 + 0j
+        if rank ==0: print(f'Creating G_half for zero f and Nb')
+        
+        G_half += (np.identity((4))[...,None,None,None] + 0j)*((kh>0.5)*(kz>0.5))[None,None,...]
     
     del invkh,invkz,sig 
     return G_half*dealias[None,None,:]
@@ -256,6 +264,7 @@ def create_G_half(G_half ,f = f_corr, Nb = N_b, alpha = alpha,invlap_press = inv
 G_half = 0.0*np.ones((4,4,N,Np,Nf),dtype = np.complex128)
 
 G_half = create_G_half(G_half)
+comm.Barrier()
 # # print(np.abs(eigL.imag).min())
 # r1,r2,r3 = np.random.randint(0,N),  np.random.randint(0,Np), np.random.randint(0,Nf)
 # eigG_half = np.linalg.eigvals(np.moveaxis(G_half,[0,1,2,3,4],[3,4,0,1,2]))
@@ -840,7 +849,7 @@ def save(i,uk,bk,alpha = alpha,saveint = saveint):
     #! Needs to be changed 
     # # dissp = -nu*comm.allreduce(np.sum((kc**(2*lp)*(np.abs(uk[0])**2 + np.abs(uk[1])**2) +sin_to_cos( ks**(2*lp)*(np.abs(uk[2])**2/alph**2 + np.abs(bk)**2)))), op = MPI.SUM)
     if rank == 0:
-        print( "#----------------------------","\n",f"Energy at time {t[i]} is : {eng1}, {eng2}","\n","#----------------------------")
+        print( "#----------------------------","\n",f"Energy at time {t[i]:.{saveint}f} is : {eng1}, {eng2}","\n","#----------------------------")
         print(f"Maximum divergence {divmax}")
         print(f"Vortex energy {ek_v_val},wave energy {ek_w_val}")
         # print( "#----------------------------","\n",f"Total dissipation at time {t[i]} is : {dissp}","\n","#----------------------------")
@@ -866,7 +875,7 @@ def evolve_and_save(t,  uk,bk,uknew=uknew, bknew = bknew,temp_4 = temp_4,alpha =
         calc_time += time() - t3
         if rank == 0:  print(f"step {i} in time {time() - t3}", end= '\r',file = sys.stderr)
         ## ------------- saving the data -------------------- ##
-        if abs(np.sin(t[i]/dt_save*PI))<= np.sin(0.5*h/dt_save*PI):
+        if abs(np.sin(t[i]/dt_save*PI)) - np.sin(0.5*h/dt_save*PI) < 1e-12:
         #     save_hdf5(i,uk,bk)
             save(i,uk,bk)
         begin = True   
@@ -1121,3 +1130,5 @@ if rank ==0:
         f.write(str({f"time taken to run from {tinit} to {T} is": t2}))
 ## --------------------------------------------------
 
+
+# %%
