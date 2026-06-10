@@ -171,10 +171,102 @@ normalize = np.where((kz== 0) + (kz == N//2) , 1/(N**6/TWO_PI**3),2/(N**6/TWO_PI
 shells = np.arange(-0.5,Nf, 1.)
 shells[0] = 0.
 
+# def create_G_half(G_half ,f = f_corr, Nb = N_b, alpha = alpha,invlap_press = invlap_press,dealias = dealias): #!old one
+#     sig = (-(kh**2*Nb**2 +f**2 *kz**2*alpha**2 )/np.where(lap_press == 0, np.inf,  lap_press))**0.5 
+
+#     Delta_t = -0.5*dt
+#     G_half += ((kh < 0.5)*(kz >0.5))[None,None,:]*np.array([
+#         [np.cos(Delta_t*f)*np.ones_like(k), - np.sin(Delta_t*f)*np.ones_like(k),0*np.ones_like(k),0*np.ones_like(k)],
+#         [np.sin(Delta_t*f)*np.ones_like(k),  np.cos(Delta_t*f)*np.ones_like(k),0*np.ones_like(k),0*np.ones_like(k)],
+#         [0*np.ones_like(k),0*np.ones_like(k),1*np.ones_like(k),0*np.ones_like(k)],
+#         [0*np.ones_like(k),0*np.ones_like(k),Nb*Delta_t/alpha*np.ones_like(k), 1*np.ones_like(k)]
+        
+#     ]) #! The kh = 0 mode
+    
+#     invkh = 1/np.where(kh < 0.5, np.inf,kh)
+#     invkz = 1/np.where(kz < 0.5, np.inf,kz)
+    
+#     G_half += ((kh > 0.5)*(kz <0.5))[None,None,:]*np.array([
+#         [1- Delta_t*f*kx*ky*invkh**2,-Delta_t*f*ky**2*invkh**2,0*np.ones_like(k),0*np.ones_like(k)],
+#         [Delta_t*f*kx**2*invkh**2, 1+ Delta_t*f*kx*ky*invkh**2,0*np.ones_like(k),0*np.ones_like(k)],
+#         [0*np.ones_like(k),0*np.ones_like(k),np.cos(Delta_t*Nb)*np.ones_like(k),-alpha*np.sin(Delta_t*Nb)*np.ones_like(k)],
+#         [0*np.ones_like(k),0*np.ones_like(k),np.sin(Delta_t*Nb)/alpha*np.ones_like(k),np.cos(Delta_t*Nb)*np.ones_like(k)]
+        
+        
+#     ]) #! The kz = 0 mode
+    
+    
+    
+#     G_half += ((kh < 0.5)*(kz <0.5))[None,None,:]*np.array([
+#         [np.cos(Delta_t*f)*np.ones_like(k), - np.sin(Delta_t*f)*np.ones_like(k),0*np.ones_like(k),0*np.ones_like(k)],
+#         [np.sin(Delta_t*f)*np.ones_like(k),   np.cos(Delta_t*f)*np.ones_like(k),0*np.ones_like(k),0*np.ones_like(k)],
+#         [0*np.ones_like(k),0*np.ones_like(k),np.cos(Delta_t*Nb)*np.ones_like(k),-alpha*np.sin(Delta_t*Nb)*np.ones_like(k)],
+#         [0*np.ones_like(k),0*np.ones_like(k),np.sin(Delta_t*Nb)/alpha*np.ones_like(k),np.cos(Delta_t*Nb)*np.ones_like(k)]
+        
+#     ]) #! The kz = 0, kh = 0 mode
+    
+#     if f == 0.0 and Nb>0.0:
+#         if rank ==0: print(f'Creating G_half for zero f and non-zero Nb')
+        
+#         kappa = kh*(-invlap_press)**0.5
+#         G_half += ((kh>0.5)*(kz>0.5))[None,None,...]*np.array([
+#             [1*np.ones_like(k),0*np.ones_like(k),kx*kz*invkh**2*(1- np.cos(Delta_t*Nb*kappa)),alpha*kx*kz*kappa*invkh**2*np.sin(Delta_t*Nb*kappa)],
+#             [0*np.ones_like(k),1*np.ones_like(k),ky*kz*invkh**2*(1- np.cos(Delta_t*Nb*kappa)),alpha*ky*kz*kappa*invkh**2*np.sin(Delta_t*Nb*kappa)],
+#             [0*np.ones_like(k),0*np.ones_like(k),np.cos(Delta_t*Nb*kappa),-alpha*kappa*np.sin(Delta_t*Nb*kappa)],
+#             [0*np.ones_like(k),0*np.ones_like(k),np.sin(Delta_t*Nb*kappa)/(alpha*np.where(kappa ==0.0, np.inf,kappa)),np.cos(Delta_t*Nb*kappa)]
+#         ]) 
+#         del kappa
+        
+#     elif Nb == 0.0 and f>0.0:
+#         if rank ==0: print(f'Creating G_half for non-zero f and zero Nb')
+        
+#         gamma = alpha*kz*(-invlap_press)**0.5
+#         G_half += ((kh>0.5)*(kz>0.5))[None,None,...]*np.array([
+#             [np.cos(gamma*Delta_t*f) - kx*ky*gamma*(invkz/alpha)**2*np.sin(gamma*Delta_t*f),-(ky**2 + alpha**2*kz**2)*gamma*(invkz/alpha)**2*np.sin(gamma*Delta_t*f),0*np.ones_like(k),0*np.ones_like(k)],
+#             [(kx**2 + alpha**2*kz**2)*gamma*(invkz/alpha)**2*np.sin(gamma*Delta_t*f),np.cos(gamma*Delta_t*f) + kx*ky*gamma*(invkz/alpha)**2*np.sin(gamma*Delta_t*f),0*np.ones_like(k),0*np.ones_like(k)],
+#             [(kx*(1-np.cos(gamma*Delta_t*f)) - gamma*ky*np.sin(gamma*Delta_t*f))*invkz,(gamma*kx*np.sin(gamma*Delta_t*f) + ky*(1- np.cos(gamma*Delta_t*f)))*invkz,0*np.ones_like(k),0*np.ones_like(k)],
+#             [0*np.ones_like(k),0*np.ones_like(k),0*np.ones_like(k),1*np.ones_like(k)]
+#         ])
+#         del gamma
+        
+#     elif f> 0.0 and Nb > 0.0:
+#         if rank ==0: print(f'Creating G_half for non-zero f and Nb')
+#         denom = np.where(f**2 * kx**2 + sig**2*ky**2 == 0.0,np.inf, f**2 * kx**2 + sig**2*ky**2)
+#         Sm = np.array([
+#             [-ky*Nb*invkz/(alpha*f),kx*Nb*invkz/(alpha*f**2),alpha*kz*(f*ky + 1j*kx*sig)*invkh**2/Nb, alpha*kz*(f*ky - 1j*kx*sig)*invkh**2/Nb],
+#             [kx*Nb*invkz/(alpha*f),ky*N*invkz/(alpha*f**2),-alpha*kz*(f**2*(kx**2 + alpha**2 *kz**2) + ky**2*Nb**2)*(-invlap_press)*(f*kx - 1j*ky*sig)/(Nb*denom),-alpha*kz*(f**2*(kx**2 + alpha**2 *kz**2) + ky**2*Nb**2)*(-invlap_press)*(f*kx + 1j*ky*sig)/(Nb*denom)],
+#             [0*np.ones_like(k),alpha/Nb*np.ones_like(k),-1j*alpha*sig/Nb,1j*alpha*sig/Nb],
+#             [1*np.ones_like(k),0*np.ones_like(k),1*np.ones_like(k),1*np.ones_like(k)]
+#         ]) +((kh<0.5)+(kz<0.5))[None, None,:]*np.identity((4))[...,None,None,None]
+        
+#         # det = np.linalg.det(np.moveaxis(Sm,[0,1,2,3,4],[3,4,0,1,2]))
+#         # print((det ==0.0).sum(),((kh<0.5)+(kz<0.5)).sum())
+#         # raise SystemExit
+#         G_half += ((kh>0.5)*(kz>0.5))[None,None,...]*np.einsum('ij...,jk...->ik...',np.einsum('ij...,jk...->ik...',Sm,np.array([
+#             [1*np.ones_like(k),Delta_t*np.ones_like(k),0*np.ones_like(k),0*np.ones_like(k)],
+#             [0*np.ones_like(k),1*np.ones_like(k),0*np.ones_like(k),0*np.ones_like(k)],
+#             [0*np.ones_like(k),0*np.ones_like(k),np.exp(-1j*sig*Delta_t),0*np.ones_like(k)],
+#             [0*np.ones_like(k),0*np.ones_like(k),0*np.ones_like(k),np.exp(1j*sig*Delta_t)]
+#         ])),np.moveaxis(inv(np.moveaxis(Sm,[0,1,2,3,4],[3,4,0,1,2])),[0,1,2,3,4],[2,3,4,0,1]))
+        
+        
+#         del Sm,denom
+
+#     else:
+#         if rank ==0: print(f'Creating G_half for zero f and Nb')
+        
+#         G_half += (np.identity((4))[...,None,None,None] + 0j)*((kh>0.5)*(kz>0.5))[None,None,...]
+    
+#     del invkh,invkz,sig 
+#     return G_half*dealias[None,None,:]
+
+
 def create_G_half(G_half ,f = f_corr, Nb = N_b, alpha = alpha,invlap_press = invlap_press,dealias = dealias):
     sig = (-(kh**2*Nb**2 +f**2 *kz**2*alpha**2 )/np.where(lap_press == 0, np.inf,  lap_press))**0.5 
 
     Delta_t = -0.5*dt
+    invkh = 1/np.where(kh < 0.5, np.inf,kh)
+    
     G_half += ((kh < 0.5)*(kz >0.5))[None,None,:]*np.array([
         [np.cos(Delta_t*f)*np.ones_like(k), - np.sin(Delta_t*f)*np.ones_like(k),0*np.ones_like(k),0*np.ones_like(k)],
         [np.sin(Delta_t*f)*np.ones_like(k),  np.cos(Delta_t*f)*np.ones_like(k),0*np.ones_like(k),0*np.ones_like(k)],
@@ -182,9 +274,7 @@ def create_G_half(G_half ,f = f_corr, Nb = N_b, alpha = alpha,invlap_press = inv
         [0*np.ones_like(k),0*np.ones_like(k),Nb*Delta_t/alpha*np.ones_like(k), 1*np.ones_like(k)]
         
     ]) #! The kh = 0 mode
-    
-    invkh = 1/np.where(kh < 0.5, np.inf,kh)
-    invkz = 1/np.where(kz < 0.5, np.inf,kz)
+
     
     G_half += ((kh > 0.5)*(kz <0.5))[None,None,:]*np.array([
         [1- Delta_t*f*kx*ky*invkh**2,-Delta_t*f*ky**2*invkh**2,0*np.ones_like(k),0*np.ones_like(k)],
@@ -205,59 +295,20 @@ def create_G_half(G_half ,f = f_corr, Nb = N_b, alpha = alpha,invlap_press = inv
         
     ]) #! The kz = 0, kh = 0 mode
     
-    if f == 0.0 and Nb>0.0:
-        if rank ==0: print(f'Creating G_half for zero f and non-zero Nb')
-        
-        kappa = kh*(-invlap_press)**0.5
-        G_half += ((kh>0.5)*(kz>0.5))[None,None,...]*np.array([
-            [1*np.ones_like(k),0*np.ones_like(k),kx*kz*invkh**2*(1- np.cos(Delta_t*Nb*kappa)),alpha*kx*kz*kappa*invkh**2*np.sin(Delta_t*Nb*kappa)],
-            [0*np.ones_like(k),1*np.ones_like(k),ky*kz*invkh**2*(1- np.cos(Delta_t*Nb*kappa)),alpha*ky*kz*kappa*invkh**2*np.sin(Delta_t*Nb*kappa)],
-            [0*np.ones_like(k),0*np.ones_like(k),np.cos(Delta_t*Nb*kappa),-alpha*kappa*np.sin(Delta_t*Nb*kappa)],
-            [0*np.ones_like(k),0*np.ones_like(k),np.sin(Delta_t*Nb*kappa)/(alpha*np.where(kappa ==0.0, np.inf,kappa)),np.cos(Delta_t*Nb*kappa)]
-        ]) 
-        del kappa
-        
-    elif Nb == 0.0 and f>0.0:
-        if rank ==0: print(f'Creating G_half for non-zero f and zero Nb')
-        
-        gamma = alpha*kz*(-invlap_press)**0.5
-        G_half += ((kh>0.5)*(kz>0.5))[None,None,...]*np.array([
-            [np.cos(gamma*Delta_t*f) - kx*ky*gamma*(invkz/alpha)**2*np.sin(gamma*Delta_t*f),-(ky**2 + alpha**2*kz**2)*gamma*(invkz/alpha)**2*np.sin(gamma*Delta_t*f),0*np.ones_like(k),0*np.ones_like(k)],
-            [(kx**2 + alpha**2*kz**2)*gamma*(invkz/alpha)**2*np.sin(gamma*Delta_t*f),np.cos(gamma*Delta_t*f) + kx*ky*gamma*(invkz/alpha)**2*np.sin(gamma*Delta_t*f),0*np.ones_like(k),0*np.ones_like(k)],
-            [(kx*(1-np.cos(gamma*Delta_t*f)) - gamma*ky*np.sin(gamma*Delta_t*f))*invkz,(gamma*kx*np.sin(gamma*Delta_t*f) + ky*(1- np.cos(gamma*Delta_t*f)))*invkz,0*np.ones_like(k),0*np.ones_like(k)],
-            [0*np.ones_like(k),0*np.ones_like(k),0*np.ones_like(k),1*np.ones_like(k)]
-        ])
-        del gamma
-        
-    elif f> 0.0 and Nb > 0.0:
-        if rank ==0: print(f'Creating G_half for non-zero f and Nb')
-        denom = np.where(f**2 * kx**2 + sig**2*ky**2 == 0.0,np.inf, f**2 * kx**2 + sig**2*ky**2)
-        Sm = np.array([
-            [-ky*Nb*invkz/(alpha*f),kx*Nb*invkz/(alpha*f**2),alpha*kz*(f*ky + 1j*kx*sig)*invkh**2/Nb, alpha*kz*(f*ky - 1j*kx*sig)*invkh**2/Nb],
-            [kx*Nb*invkz/(alpha*f),ky*N*invkz/(alpha*f**2),-alpha*kz*(f**2*(kx**2 + alpha**2 *kz**2) + ky**2*Nb**2)*(-invlap_press)*(f*kx - 1j*ky*sig)/(Nb*denom),-alpha*kz*(f**2*(kx**2 + alpha**2 *kz**2) + ky**2*Nb**2)*(-invlap_press)*(f*kx + 1j*ky*sig)/(Nb*denom)],
-            [0*np.ones_like(k),alpha/Nb*np.ones_like(k),-1j*alpha*sig/Nb,1j*alpha*sig/Nb],
-            [1*np.ones_like(k),0*np.ones_like(k),1*np.ones_like(k),1*np.ones_like(k)]
-        ]) +((kh<0.5)+(kz<0.5))[None, None,:]*np.identity((4))[...,None,None,None]
-        
-        # det = np.linalg.det(np.moveaxis(Sm,[0,1,2,3,4],[3,4,0,1,2]))
-        # print((det ==0.0).sum(),((kh<0.5)+(kz<0.5)).sum())
-        # raise SystemExit
-        G_half += ((kh>0.5)*(kz>0.5))[None,None,...]*np.einsum('ij...,jk...->ik...',np.einsum('ij...,jk...->ik...',Sm,np.array([
-            [1*np.ones_like(k),Delta_t*np.ones_like(k),0*np.ones_like(k),0*np.ones_like(k)],
-            [0*np.ones_like(k),1*np.ones_like(k),0*np.ones_like(k),0*np.ones_like(k)],
-            [0*np.ones_like(k),0*np.ones_like(k),np.exp(-1j*sig*Delta_t),0*np.ones_like(k)],
-            [0*np.ones_like(k),0*np.ones_like(k),0*np.ones_like(k),np.exp(1j*sig*Delta_t)]
-        ])),np.moveaxis(inv(np.moveaxis(Sm,[0,1,2,3,4],[3,4,0,1,2])),[0,1,2,3,4],[2,3,4,0,1]))
-        
-        
-        del Sm,denom
 
-    else:
-        if rank ==0: print(f'Creating G_half for zero f and Nb')
+    Lmat = np.array([
+        [-f_corr*kx*ky*(-invlap_press),                    f_corr*(kx**2*(-invlap_press) - 1),           0*invlap_press,      alpha*kx*kz*N_b*(-invlap_press)],
+        [-f_corr*(ky**2*(-invlap_press) - 1),              f_corr*kx*ky*(-invlap_press),                 0*invlap_press,      alpha*ky*kz*N_b*(-invlap_press)],
+        [-alpha**2*f_corr*ky*kz*(-invlap_press),           alpha**2*f_corr*kx*kz*(-invlap_press),        0*invlap_press,     -alpha*N_b*(kx**2 + ky**2)*(-invlap_press)],
+        [0*invlap_press,                             0*invlap_press,                          N_b/alpha + 0*invlap_press, 0*invlap_press]
+    ])
+    invsig = np.where(sig ==0.0, np.inf, sig)
+    G_half += (np.identity(4)[...,None,None,None] + Delta_t *Lmat 
+               + np.einsum('ij...,jk...->ik...',Lmat,Lmat)*(invsig**2 *(1-np.cos(sig*Delta_t)))[None,None,...]
+               + np.einsum('ij...,jk...,kl...->il...',Lmat,Lmat,Lmat)*(invsig**3*(sig*Delta_t - np.sin(sig*Delta_t)))[None, None,...])*((kh>0.5)*(kz>0.5))[None,None,...] #! The kz \neq 0, kh \neq 0 mode
         
-        G_half += (np.identity((4))[...,None,None,None] + 0j)*((kh>0.5)*(kz>0.5))[None,None,...]
-    
-    del invkh,invkz,sig 
+        
+    del Lmat,invkh,sig,invsig
     return G_half*dealias[None,None,:]
 
 
