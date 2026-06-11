@@ -45,7 +45,7 @@ else : isexplicit = 0.
 #%%
 
 ## ------------- Time steps --------------
-N = 128
+N = 64
 dt = 0.256/N   #! Such that increasing resolution will decrease the dt
 f_corr = float(sys.argv[-2])
 # N_bs = [15,200]
@@ -172,6 +172,8 @@ shells = np.arange(-0.5,Nf, 1.)
 shells[0] = 0.
 
 # def create_G_half(G_half ,f = f_corr, Nb = N_b, alpha = alpha,invlap_press = invlap_press,dealias = dealias): #!old one
+#     # f = 1.0/np.where(kz == 0.0, np.inf, kz)/alpha
+#     # Nb = 1.0/np.where(kh == 0.0, np.inf, kh)
 #     sig = (-(kh**2*Nb**2 +f**2 *kz**2*alpha**2 )/np.where(lap_press == 0, np.inf,  lap_press))**0.5 
 
 #     Delta_t = -0.5*dt
@@ -258,70 +260,50 @@ shells[0] = 0.
 #         G_half += (np.identity((4))[...,None,None,None] + 0j)*((kh>0.5)*(kz>0.5))[None,None,...]
     
 #     del invkh,invkz,sig 
-#     return G_half*dealias[None,None,:]
+#     return G_half#*dealias[None,None,:]
 
 
 def create_G_half(G_half ,f = f_corr, Nb = N_b, alpha = alpha,invlap_press = invlap_press,dealias = dealias):
-    sig = (-(kh**2*Nb**2 +f**2 *kz**2*alpha**2 )/np.where(lap_press == 0, np.inf,  lap_press))**0.5 
+    # f = 1.0/np.where(kz == 0.0, np.inf, kz)/alpha
+    # Nb = 1.0/np.where(kh == 0.0, np.inf, kh)
+    sig = (-(kh**2*Nb**2 +f**2 *kz**2*alpha**2 )*invlap_press)**0.5 
 
     Delta_t = -0.5*dt
-    invkh = 1/np.where(kh < 0.5, np.inf,kh)
-    
-    G_half += ((kh < 0.5)*(kz >0.5))[None,None,:]*np.array([
-        [np.cos(Delta_t*f)*np.ones_like(k), - np.sin(Delta_t*f)*np.ones_like(k),0*np.ones_like(k),0*np.ones_like(k)],
-        [np.sin(Delta_t*f)*np.ones_like(k),  np.cos(Delta_t*f)*np.ones_like(k),0*np.ones_like(k),0*np.ones_like(k)],
-        [0*np.ones_like(k),0*np.ones_like(k),1*np.ones_like(k),0*np.ones_like(k)],
-        [0*np.ones_like(k),0*np.ones_like(k),Nb*Delta_t/alpha*np.ones_like(k), 1*np.ones_like(k)]
-        
-    ]) #! The kh = 0 mode
-
-    
-    G_half += ((kh > 0.5)*(kz <0.5))[None,None,:]*np.array([
-        [1- Delta_t*f*kx*ky*invkh**2,-Delta_t*f*ky**2*invkh**2,0*np.ones_like(k),0*np.ones_like(k)],
-        [Delta_t*f*kx**2*invkh**2, 1+ Delta_t*f*kx*ky*invkh**2,0*np.ones_like(k),0*np.ones_like(k)],
-        [0*np.ones_like(k),0*np.ones_like(k),np.cos(Delta_t*Nb)*np.ones_like(k),-alpha*np.sin(Delta_t*Nb)*np.ones_like(k)],
-        [0*np.ones_like(k),0*np.ones_like(k),np.sin(Delta_t*Nb)/alpha*np.ones_like(k),np.cos(Delta_t*Nb)*np.ones_like(k)]
-        
-        
-    ]) #! The kz = 0 mode
-    
-    
-    
-    G_half += ((kh < 0.5)*(kz <0.5))[None,None,:]*np.array([
-        [np.cos(Delta_t*f)*np.ones_like(k), - np.sin(Delta_t*f)*np.ones_like(k),0*np.ones_like(k),0*np.ones_like(k)],
-        [np.sin(Delta_t*f)*np.ones_like(k),   np.cos(Delta_t*f)*np.ones_like(k),0*np.ones_like(k),0*np.ones_like(k)],
-        [0*np.ones_like(k),0*np.ones_like(k),np.cos(Delta_t*Nb)*np.ones_like(k),-alpha*np.sin(Delta_t*Nb)*np.ones_like(k)],
-        [0*np.ones_like(k),0*np.ones_like(k),np.sin(Delta_t*Nb)/alpha*np.ones_like(k),np.cos(Delta_t*Nb)*np.ones_like(k)]
-        
-    ]) #! The kz = 0, kh = 0 mode
-    
 
     Lmat = np.array([
-        [-f_corr*kx*ky*(-invlap_press),                    f_corr*(kx**2*(-invlap_press) - 1),           0*invlap_press,      alpha*kx*kz*N_b*(-invlap_press)],
-        [-f_corr*(ky**2*(-invlap_press) - 1),              f_corr*kx*ky*(-invlap_press),                 0*invlap_press,      alpha*ky*kz*N_b*(-invlap_press)],
-        [-alpha**2*f_corr*ky*kz*(-invlap_press),           alpha**2*f_corr*kx*kz*(-invlap_press),        0*invlap_press,     -alpha*N_b*(kx**2 + ky**2)*(-invlap_press)],
-        [0*invlap_press,                             0*invlap_press,                          N_b/alpha + 0*invlap_press, 0*invlap_press]
+        [-f*kx*ky*(-invlap_press),                    f*(kx**2*(-invlap_press) - 1),           0.0*invlap_press,      alpha*kx*kz*Nb*(-invlap_press)],
+        [f*(1-ky**2*(-invlap_press) ),              f*kx*ky*(-invlap_press),                 0.0*invlap_press,      alpha*ky*kz*Nb*(-invlap_press)],
+        [-alpha**2*f*ky*kz*(-invlap_press),           alpha**2*f*kx*kz*(-invlap_press),        0*invlap_press,     -alpha*Nb*(kx**2 + ky**2)*(-invlap_press)],
+        [0*invlap_press,                             0*invlap_press,                          Nb/alpha + 0*invlap_press, 0*invlap_press]
+    ])*((kh>0.5)+(kz>0.5))[None,None,...] + ((kh<0.5)*(kz<0.5))[None,None,...]*np.array([
+        [0.*k,                   -f + 0.*k,           0.0*k,      0.*k],
+        [f + 0.*k,                    0.*k,           0.0*k,      0.*k],
+        [0.0*k,                   0.0*k,           0.0*k,     -alpha*Nb +  0.0*k],
+        [0.0*k,                   0.0*k,           Nb/alpha + 0.0*k,     0.0*k]
+        
     ])
-    invsig = np.where(sig ==0.0, np.inf, sig)
-    G_half += (np.identity(4)[...,None,None,None] + Delta_t *Lmat 
-               + np.einsum('ij...,jk...->ik...',Lmat,Lmat)*(invsig**2 *(1-np.cos(sig*Delta_t)))[None,None,...]
-               + np.einsum('ij...,jk...,kl...->il...',Lmat,Lmat,Lmat)*(invsig**3*(sig*Delta_t - np.sin(sig*Delta_t)))[None, None,...])*((kh>0.5)*(kz>0.5))[None,None,...] #! The kz \neq 0, kh \neq 0 mode
+    invsig = 1.0/np.where(sig ==0.0, np.inf, sig)
+
+    G_half += np.moveaxis(expm(np.moveaxis(Lmat ,[0,1,2,3,4],[3,4,0,1,2])* Delta_t),[0,1,2,3,4],[2,3,4,0,1])      #! The kz \neq 0, kh \neq 0 mode
         
-        
-    del Lmat,invkh,sig,invsig
+    del Lmat,sig,invsig
     return G_half*dealias[None,None,:]
 
 
-G_half = 0.0*np.ones((4,4,N,Np,Nf),dtype = np.complex128)
+G_half = 0.0*np.ones((4,4,N,Np,Nf),dtype = np.float64)
 
 G_half = create_G_half(G_half)
 comm.Barrier()
-# # print(np.abs(eigL.imag).min())
+# print(np.abs(eigL.imag).min())
 # r1,r2,r3 = np.random.randint(0,N),  np.random.randint(0,Np), np.random.randint(0,Nf)
 # eigG_half = np.linalg.eigvals(np.moveaxis(G_half,[0,1,2,3,4],[3,4,0,1,2]))
-# print(np.abs(G_half.real).max(),eigG_half[r1,r2,r3],(r1,r2,r3),np.min(np.linalg.norm(eigG_half,axis = -1)))
+# # print(np.abs(G_half.imag).max(),np.max(np.abs(eigG_half)**2),np.min(np.abs(eigG_half)**2)) 
+# print(np.abs(G_half.imag).max(),eigG_half[r1,r2,r3],(r1,r2,r3),np.max(np.abs(eigG_half)**2),np.min(np.abs(eigG_half)**2)) 
+
+
+# error = np.argmax(np.abs(4 - np.sum(np.abs(eigG_half)**2,axis =-1)))
+# print(f"K max error: {kx.ravel()[error], ky.ravel()[error],kz.ravel()[error]}")
 # raise SystemExit
-# del Lmat
 # check_G = np.einsum('ij...,jk...-> ik...',G_half,G_half)
 # maxerror = comm.allreduce(np.abs(G).max(),op = MPI.MAX)
 # if rank ==0: 
