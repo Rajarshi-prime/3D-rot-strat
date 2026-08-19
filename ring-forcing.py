@@ -13,9 +13,13 @@ num_process =  comm.Get_size()
 rank = comm.Get_rank()
 ## ---------------------------------------
 
+
+if float(sys.argv[-1]) == 1.0:
+    with open(curr_path/"parameters_OT.json") as f: param = json.load(f) #! Does not initialize balanced flow.
+else:
+    with open(curr_path/"parameters.json") as f: param = json.load(f)
 ## --------- Loading from the parameters file ------------
-with open(curr_path/"parameters_OT.json") as f:
-    param = json.load(f)
+    
 
 T = param["Final_time"]
 dt = param["time_step"]
@@ -28,7 +32,7 @@ lp = param["hyperviscous"]
 alph = param["Alpha"]
 aa = N**3*param["Forcing amplitude"]
 aa_v = N**3*param["Balanced Forcing amplitude"]
-aa_w = N**3*param["Wave Forcing amplitude"]
+aa_w = 0.0 if float(sys.argv[-1]) == 2.0 else N**3*param["Wave Forcing amplitude"]
 einit = N**3*param["Initial balanced amplitude"]
 kinit = param["k limit"]
 omega = param["Forcing frequency"]
@@ -79,6 +83,7 @@ sigNeg_arr = np.array([-omega])
 
 
 ## ---------------------------------
+e_v_thresh = 4.0
 if low_wave: 
     savePath = pathlib.Path(f"/mnt/pfs/rajarshi.chattopadhyay/boussinesq/data_final/nu_{nu}_N_{N}/Ro_{ro}/forcedTide_ring_LW")
     e_w_thresh = 0.5
@@ -87,8 +92,10 @@ else:
     e_w_thresh = 4.0
 if aa_v  == 0.:
     savePath = pathlib.Path(f"/mnt/pfs/rajarshi.chattopadhyay/boussinesq/data_final/nu_{nu}_N_{N}/Ro_{ro}/forcedTide_ring_OT")
-# e_v_thresh = 4.0
-e_v_thresh = 0.0 #! Avoiding balanced forcing
+    e_v_thresh = 0.0 #! Avoiding balanced forcing
+elif aa_w == 0:
+    savePath = pathlib.Path(f"/mnt/pfs/rajarshi.chattopadhyay/boussinesq/data_final/nu_{nu}_N_{N}/Ro_{ro}/forcedTide_ring_OB")
+    e_w_thresh = 0.0 #! Avoiding wave forcing
 if rank == 0:
     try: savePath.mkdir(parents=True,  exist_ok=True)
     except FileExistsError: pass
@@ -386,8 +393,8 @@ def RHS(t,u, b, u_t, b_t,e_v,e_w):
     # u_v[:],b_v[:],u_w[:],b_w[:] = decompose(u,b,u_v,b_v,u_w,b_w)
     ## The RHS terms of u, v and w excluding the pressure and the hypervisocsity term 
     fk_w[:],fkb_w[:] = f_tide(t,e_w,aa_w,e_w_thresh)
-    # fk_v[:], fkb_v[:] = f_balanced(t,e_v,aa_v,e_v_thresh) 
-    fk_v[:], fkb_v[:] = 0.0,0.0 #! Not forcing the balanced flow.
+    fk_v[:], fkb_v[:] = f_balanced(t,e_v,aa_v,e_v_thresh) 
+    # fk_v[:], fkb_v[:] = 0.0,0.0 #! Not forcing the balanced flow.
     
     # --------------- calculating the forcing contribution ----------------
     # ke_w = 0.5*comm.allreduce(np.sum((np.abs(fk_w[0])**2 + np.abs(fk_w[1])**2 + np.abs(sin_to_cos(fk_w[2]))**2 )*normalize), op = MPI.SUM)
@@ -638,8 +645,8 @@ def evolve_and_save(t,  u, b):
         # if rank == 0:  print("time", np.round(t[i], 4), end= '\r')
         if rank == 0:  print(f"step {i} in time {time() - t3}", end= '\r',file = sys.stderr)
         t3 = time()
-        # u_v[:],b_v[:],u_w[:],b_w[:] = decompose(u,b,u_v,b_v,u_w,b_w)
-        u_v[:],b_v[:],u[:],b[:] = decompose(u,b,u_v,b_v,u_w,b_w) #! Eliminating the geostrophic part
+        u_v[:],b_v[:],u_w[:],b_w[:] = decompose(u,b,u_v,b_v,u_w,b_w)
+        # u_v[:],b_v[:],u[:],b[:] = decompose(u,b,u_v,b_v,u_w,b_w) #! Eliminating the geostrophic part
 
         e_w = 0.5*comm.allreduce(np.sum(u_w[0]**2 + u_w[1]**2 + u_w[2]**2/alph**2 + b_w**2), op = MPI.SUM)*dx*dy*dz
         e_v = 0.5*comm.allreduce(np.sum(u_v[0]**2 + u_v[1]**2 + u_v[2]**2/alph**2 + b_v**2), op = MPI.SUM)*dx*dy*dz
@@ -755,8 +762,8 @@ if paramfile.exists() and not forcestart:
         paths = sorted([x for x in (savePath).iterdir() if "time_" in str(x)], key=os.path.getmtime)
         """The folder is paths[-1]"""
         paths = paths[-1]
-        tinit = float(str(paths).split("time_")[-1])
-        tinit = 250.0 #! Manually setting restart time
+        # tinit = float(str(paths).split("time_")[-1])
+        tinit = 130.0 #! Manually setting restart time
         paths = savePath/f"time_{tinit:.1f}" 
         
         num_process_data = params_loaded["num_process"]

@@ -35,7 +35,7 @@ num_process =  comm.Get_size()
 rank = comm.Get_rank()
 #%%
 if rank ==0: print(f"Forcestart:{forcestart}, omg_save :{omg_save}")
-isforcing = True
+isforcing = False
 viscosity_integrator = "implicit" 
 # viscosity_integrator = "explicit" #! Do not use this for hyperviscous simulations or cases with high resolution simulations.
 # viscosity_integrator = "exponential"
@@ -51,8 +51,9 @@ f_corr = float(sys.argv[-2])
 # N_bs = [15,200]
 N_b = float(sys.argv[-3])
 T = 120 if not omg_save else 31.4/f_corr
-dt_save = 1 if not omg_save else round(2/N_b,int(np.log10(N_b)))
-saveint = int(np.log10(1/dt_save))
+dt_save = dt if not omg_save else round(2/N_b,int(np.log10(N_b)))
+# saveint = int(np.log10(1/dt_save))
+saveint = 3
 st = round(dt_save/dt)
 
 
@@ -98,7 +99,7 @@ nu0 = 0.59 #! Viscosity for N = 1
 # nu = nu0*(3*m/(N*2**0.5))**(2*(lp - 1/3))  #? scaling with resolution. For 512, nu = 0.002 #! Need to add scaling for hyperviscosity
 # m = [10,20,5,1,50,100,1000][int(float(sys.argv[-1]))] # Dissipation strength at the highest kmax. 
 m = 1000 # Dissipation strength at the highest kmax. 
-nu = m/(2**0.5*N//3)**(2*lp) # Because boussinesq does not follow Kolmogorov scaling.
+nu = m/((2**0.5*N)//3)**(2*lp) # Because boussinesq does not follow Kolmogorov scaling.
 
 re = np.inf if nu==0 else 1/nu
 
@@ -135,6 +136,10 @@ if rank == 0:
 
 lap = -1.0*(kx**2 + ky**2 + kz**2 )
 lap_press = -1.0*(kx**2 + ky**2 + alpha**2 * kz**2 ) #! Laplacian operator modified with alpha
+k_act = (-lap_press)**0.5
+k_act_max = comm.allreduce(k_act.max(),op = MPI.MAX)
+shells_act = np.arange(-0.5,int(k_act_max)+1, 1.)
+shells_act[0] = 0.0
 k = (-lap)**0.5
 kint = np.clip(np.round(k,0).astype(int),None,N//2)
 kh = (kx**2 + ky**2)**0.5
@@ -154,7 +159,7 @@ lapwv = -1.0*(kx**2 + ky**2 + (fbyN)**2*alpha**2*kz**2 )
 invlapwv = dealias/np.where(lapwv == 0, np.inf,lapwv)
 
 # Hyperviscous operator
-vis = nu*(k)**(2*lp) ## This is in Fourier Space
+vis = nu*(-lap)**(lp) ## This is in Fourier Space
 
 normalize = np.where((kz== 0) + (kz == N//2) , 1/(N**6/TWO_PI**3),2/(N**6/TWO_PI**3))
 shells = np.arange(-0.5,Nf, 1.)
@@ -167,8 +172,8 @@ nshells = len(shell_no) # Number of consecutive shells to be forced
 
 #----  Kolmogorov length scale - \eta \epsilon etc...---------
 
-f0 = 0.1*(nu0)**3*TWO_PI**3/ nshells #! Total power input at each shells
-einit = 0.0*TWO_PI**3 if f_corr> 0 or N_b > 0 else 2*f0# Initial energy
+f0 = (nu0)**3*TWO_PI**3/ nshells #! Total power input at each shells
+einit = 0.0*TWO_PI**3 if f_corr> 0 or N_b > 0 else 1*TWO_PI**3# Initial energy
 
 # f0 = 0.02 /(N_b**2)*nshells#! Total power input at each shells
 if rank ==0 : print(f" Power input  : {nshells*f0} \n Viscosity : {nu}, Re : {re},dt : {dt}")
@@ -294,11 +299,8 @@ def create_G_half(G_half ,f = f_corr, Nb = N_b, alpha = alpha,invlap_press = inv
 G_half = 0.0*np.ones((4,4,N,Np,Nf),dtype = np.float64)
 
 G_half = create_G_half(G_half)
-maxG_half = np.abs(G_half - dealias[None,None,:]*(np.identity((4))[...,None,None,None])*np.ones_like(k)[None,None,...]).max()
-
-
 comm.Barrier()
-# print(np.abs(eigL.imag).min())x
+# print(np.abs(eigL.imag).min())
 # r1,r2,r3 = np.random.randint(0,N),  np.random.randint(0,Np), np.random.randint(0,Nf)
 # eigG_half = np.linalg.eigvals(np.moveaxis(G_half,[0,1,2,3,4],[3,4,0,1,2]))
 # # print(np.abs(G_half.imag).max(),np.max(np.abs(eigG_half)**2),np.min(np.abs(eigG_half)**2)) 
@@ -341,6 +343,7 @@ bk_v = bk.copy()
 ek = np.zeros_like(pk, dtype = np.float64)
 Pik = np.zeros_like(pk, dtype = np.float64)
 ek_arr = np.zeros(Nf)
+ek_act = np.zeros(shells_act.size -1)
 Pik_arr = np.zeros(Nf)
 ekh_arr = np.zeros(Nf)
 Pikh_arr = np.zeros(Nf)
@@ -442,7 +445,7 @@ def diff_z(u, u_z):
     u_z[:] = irfft(1j*kz_diff*rfft(u, axis= 2), N, axis= 2)
     return u_z
 
-def e3d_to_e1d(x,k = k): #1 Based on whether k is 2D or 3D, it will bin the data accordingly. 
+def e3d_to_e1d(x,k = k,shells = shells): #1 Based on whether k is 2D or 3D, it will bin the data accordingly. 
     return np.histogram(k.ravel(),bins = shells,weights=x.ravel())[0] 
 
 def ensure_reality(uk):
@@ -602,7 +605,22 @@ else:
         
         return aa*fk*isforcing*dealias, aa*fkb*isforcing*dealias
 
+def ABC_flow_rhs(a,b,c):
+    factor = a * (alpha**2 - 1) / (alpha**2 + 1)
 
+    result = 1.0*factor*np.array([
+        - b * np.cos(x) * np.cos(z),
+        c * np.sin(y) * np.sin(z),
+        (c * np.cos(y) * np.cos(z) - b * np.sin(x) * np.sin(z))
+    ])
+
+    return result
+
+def ABC_flow(a,b,c):
+    Fx = c*np.cos(y) + a*np.sin(z)
+    Fy = a*np.cos(z) + b*np.sin(x)
+    Fz = b*np.cos(x) + c*np.sin(y)
+    return 1.0*np.array([Fx,Fy,Fz])
 
 def G_prod(uk,bk,G_half = G_half):
     return np.einsum('ij...,jk...,k...->i...',G_half,G_half,np.concatenate((uk,bk[None,...]),axis = 0))
@@ -765,6 +783,7 @@ def save(i,uk,bk,alpha = alpha,saveint = saveint):
     ek[:] = 0.5*(np.abs(uk[0])**2 + np.abs(uk[1])**2 + np.abs(uk[2])**2 /alpha**2+ np.abs(bk)**2)*normalize #! This is the 3D ek array
     ek_arr[:] = 0.0
     ek_arr[:] = comm.allreduce(e3d_to_e1d(ek),op = MPI.SUM) #! This is the shell-summed ek array.
+    ek_act[:] = comm.allreduce(e3d_to_e1d(ek,k_act,shells_act),op = MPI.SUM)
     ekh_arr[:] = comm.allreduce(e3d_to_e1d(ek,kh),op = MPI.SUM) #! This is the shell-summed ek array.
     ekz_arr[:] = comm.allreduce(e3d_to_e1d(ek,kh),op = MPI.SUM) #! This is the shell-summed ek array.
     Pik[:] = np.real(np.conjugate(uk[0])*k1u[0]+np.conjugate(uk[1])*k1u[1]+ np.conjugate(uk[2])*k1u[2]/alpha**2 + np.conjugate(bk)*k1b)*dealias*normalize
@@ -772,7 +791,10 @@ def save(i,uk,bk,alpha = alpha,saveint = saveint):
     Pik_arr[:] = comm.allreduce(e3d_to_e1d(Pik),op = MPI.SUM)
     Pik_arr[:] = np.cumsum(Pik_arr[::-1])[::-1]
     
-    Pikh_arr[:] = comm.allreduce(e3d_to_e1d(Pik,kh),op = MPI.SUM)
+    Pik_act = comm.allreduce(e3d_to_e1d(Pik,k_act,shells_act),op = MPI.SUM)
+    Pik_act[:] = np.cumsum(Pik_act[::-1])[::-1]
+    
+    Pikh_arr[:] = comm.allreduce(e3d_to_e1d(Pik ,kh),op = MPI.SUM)
     Pikh_arr[:] = np.cumsum(Pikh_arr[::-1])[::-1]
     
     Pikz_arr[:] = comm.allreduce(e3d_to_e1d(Pik,kz),op = MPI.SUM)
@@ -814,6 +836,10 @@ def save(i,uk,bk,alpha = alpha,saveint = saveint):
                 f.create_group('Energy_Spectra')
             if 'Flux_Spectra' not in f:
                 f.create_group('Flux_Spectra')
+            if 'unscaled_Energy_Spectra' not in f:
+                f.create_group('unscaled_Energy_Spectra')
+            if 'unscaled_Flux_Spectra' not in f:
+                f.create_group('unscaled_Flux_Spectra')
             if 'Hor_Energy_Spectra' not in f:
                 f.create_group('Hor_Energy_Spectra')
             if 'Hor_Flux_Spectra' not in f:
@@ -848,6 +874,11 @@ def save(i,uk,bk,alpha = alpha,saveint = saveint):
                 f['zeta_rms_timeseries'][-1] = zeta_rms
                 
                 
+            try: f[f"unscaled_Energy_Spectra/time_{t[i]:.{saveint}f}"][...] = ek_act
+            except KeyError: f[f"unscaled_Energy_Spectra/time_{t[i]:.{saveint}f}"] = ek_act
+            try : f[f"unscaled_Flux_Spectra/time_{t[i]:.{saveint}f}"][...]=  Pik_act
+            except KeyError: f[f"unscaled_Flux_Spectra/time_{t[i]:.{saveint}f}"]=  Pik_act
+            
             try: f[f"Energy_Spectra/time_{t[i]:.{saveint}f}"][...] = ek_arr
             except KeyError: f[f"Energy_Spectra/time_{t[i]:.{saveint}f}"] = ek_arr
             try : f[f"Flux_Spectra/time_{t[i]:.{saveint}f}"][...]=  Pik_arr
@@ -966,13 +997,13 @@ def evolve_and_save(t,  uk,bk,uknew=uknew, bknew = bknew,temp_4 = temp_4,alpha =
         
         
         
-        # """ Enforcing the reality condition """
+        """ Enforcing the reality condition """
         uk[0] = ensure_reality(uknew[0])
         uk[1] = ensure_reality(uknew[1])
         uk[2] = ensure_reality(uknew[2])
         bk[:] = ensure_reality(bknew)
         
-        # """Enforcing div free conditon"""
+        """Enforcing div free conditon"""
         uk[:] = ensure_div_free(uk)
         # uk[:] = uknew
         # bk[:] = bknew
@@ -1064,14 +1095,14 @@ if forcestart:
     thw = np.random.uniform(0, TWO_PI,  k.shape)
 
     # eprofile = 1/np.where(kint ==0, np.inf,kint**(2.0))/normalize
-    eprofile = kint**2*np.exp(-kint**2/2)/normalize
+    eprofile = k_act**2*np.exp(-k_act**2/2)/normalize
     
     
-    amp = (eprofile/np.where(kint == 0, np.inf, kint**2))**0.5
+    amp = (eprofile/np.where(k_act == 0, np.inf, k_act**2))**0.5
     
-    uk[0] = amp*np.exp(1j*thu)*(kint**2<kinit**2)*(kint>0)*dealias
-    uk[1] = amp*np.exp(1j*thv)*(kint**2<kinit**2)*(kint>0)*dealias
-    uk[2] = amp*np.exp(1j*thw)*(kint**2<kinit**2)*(kint>0)*dealias/alpha
+    uk[0] = amp*np.exp(1j*thu)*(k_act**2<kinit**2)*(k_act>0)*dealias
+    uk[1] = amp*np.exp(1j*thv)*(k_act**2<kinit**2)*(k_act>0)*dealias
+    uk[2] = amp*np.exp(1j*thw)*(k_act**2<kinit**2)*(k_act>0)*dealias/alpha
     
     u[0] = irfft_mpi(uk[0], u[0])
     u[1] = irfft_mpi(uk[1], u[1])
@@ -1105,6 +1136,14 @@ if forcestart:
     # uk_v, bk_v = vortex(uk,bk)
     # uk,bk = uk - uk_v, bk - bk_v
     tinit = 0.
+
+
+# aalpha,beta,gamma = 10,12,13
+# u[:] = ABC_flow(aalpha,beta,gamma)
+# uk[0] = rfft_mpi(u[0],uk[0])
+# uk[1] = rfft_mpi(u[1],uk[1])
+# uk[2] = rfft_mpi(u[2],uk[2])
+# uk[2] *= 1/alpha
 
 ek[:] = 0.5*(np.abs(uk[0])**2 + np.abs(uk[1])**2 + np.abs(uk[2])**2/alpha**2 + np.abs(bk)**2)*normalize #! This is the 3D ek array
 ek_arr0 = comm.allreduce(e3d_to_e1d(ek),op = MPI.SUM) #! This is the shell-summed ek a
@@ -1143,11 +1182,22 @@ if rank ==0 : print(f"Initial Physical space energy: {np.sum(e0)}")
 #-------------------------------------------------------
 
 #----------------- testing const. power input ----------
-# fk[:],fkb[:] = forcing(uk,bk)
-# pwrinpt = comm.allreduce(np.sum(np.real(np.einsum('i...,i...->...',np.conjugate(fk[:2]),uk[:2]) + np.conjugate(fk[2])*uk[2]/alpha**2 + np.conjugate(fkb)*bk)*dealias*normalize),op = MPI.SUM)
-# if rank ==0: 
-#     print(f" Prescribed power input: {nshells*f0}, calculated:{pwrinpt}")
-# comm.Barrier()
+# temp_4[:] = G_half_prod(uk,bk)
+# k1u[:],k1b[:] = RHS(temp_4[:3],temp_4[3],k1u,k1b)
+# ucalc = 0.0*u
+# ucalc[0] = irfft_mpi(k1u[0],ucalc[0])
+# ucalc[1] = irfft_mpi(k1u[1],ucalc[1])
+# ucalc[2] = irfft_mpi(k1u[2],ucalc[2])
+
+# uanltc = ABC_flow_rhs(aalpha,beta,gamma)
+
+# maxerror = comm.allreduce(np.abs(ucalc- uanltc).max(),op = MPI.MAX)
+# if rank ==0 : print(f"Max error in ABC Rhs {maxerror}")
+# # fk[:],fkb[:] = forcing(uk,bk)
+# # pwrinpt = comm.allreduce(np.sum(np.real(np.einsum('i...,i...->...',np.conjugate(fk[:2]),uk[:2]) + np.conjugate(fk[2])*uk[2]/alpha**2 + np.conjugate(fkb)*bk)*dealias*normalize),op = MPI.SUM)
+# # if rank ==0: 
+# #     print(f" Prescribed power input: {nshells*f0}, calculated:{pwrinpt}")
+# # comm.Barrier()
 # raise SystemExit
 #-------------------------------------------------------
 
@@ -1164,6 +1214,7 @@ if rank ==0:
     with open(savePath/f"calcTime.txt","a") as f:
         f.write(str({f"time taken to run from {tinit} to {T} is": t2}))
 ## --------------------------------------------------
+
 
 
 # %%

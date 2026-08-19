@@ -10,7 +10,7 @@ from scipy.fft import fft ,  ifft ,  irfft2 ,  rfft2 , irfftn ,  rfftn, fftfreq,
 import pathlib
 import matplotlib as mpl 
 mpl.rc('text', usetex = True)
-import os
+import os,json
 import sys
 from mpi4py import MPI
 # from pyevtk.hl import imageToVTK
@@ -30,11 +30,11 @@ TWO_PI = 2*np.pi
 PI = np.pi
 # Tf_glob = [2*PI ,4*PI] + [PI*i for i in range(5,101,5)]
 # Tf = np.round(Tf_glob[int(sys.argv[-1])],1)
-Ti = 780 - 100*PI
-Tf = Ti + 100*PI
+Ti = 100
+Tf = Ti + 10*PI
 nu = 1e-31
 N = 384
-ro = 0.1
+ro = 1.0
 num_slabs = 192
 nPts = int(N*N * (N//num_slabs))
 times_o = np.arange(Ti,Tf,0.1)
@@ -47,9 +47,12 @@ omega = 1.7277
 ## ---------------------------------------
 
 ## ------------ Paths --------------------
-curr_path = pathlib.Path("/mnt/pfs/rajarshi.chattopadhyay/boussinesq/spectrum-development/")
-loadPath = curr_path/f"nu_{nu}_N_{N}/Ro_{ro}/forcedTide_ring_{omega:.2f}"
-savePath = pathlib.Path(f"/mnt/pfs/rajarshi.chattopadhyay/codes/boussinesq/Plots/nu_{nu}_N_{N}/Ro_{ro}/forcedTide_ring_{omega:.2f}")
+curr_path = pathlib.Path("/mnt/pfs/rajarshi.chattopadhyay/codes/boussinesq/")
+# curr_path = pathlib.Path("/mnt/pfs/rajarshi.chattopadhyay/boussinesq/spectrum-development/")
+# loadPath = curr_path/f"nu_{nu}_N_{N}/Ro_{ro}/forcedTide_ring_OB_{omega:.2f}"
+loadPath = pathlib.Path(f"/mnt/pfs/rajarshi.chattopadhyay/boussinesq/data_final/nu_{nu}_N_{N}/Ro_{ro}/forcedTide_ring_OB")
+# savePath = pathlib.Path(f"/mnt/pfs/rajarshi.chattopadhyay/codes/boussinesq/Plots/nu_{nu}_N_{N}/Ro_{ro}/forcedTide_ring_OB_{omega:.2f}")
+savePath = pathlib.Path(f"/mnt/pfs/rajarshi.chattopadhyay/codes/boussinesq/Plots/nu_{nu}_N_{N}/Ro_{ro}/forcedTide_ring_OB")
 savePath.mkdir(parents=True,  exist_ok=True)
 ## ---------------------------------------
 
@@ -73,8 +76,17 @@ if paramfile.exists():
     del paramfile,param_file,param
     # print(times)
     
+elif (loadPath/f"parameters.json").exists():
+    with open(loadPath/f"parameters.json") as f: param = json.load(f) #! Does not initialize balanced flow.
+    ro = param["Rossby"]
+    lp = param["hyperviscous"] 
+    alph = param["Alpha"] 
+    T = param["Final_time"]
+    dt = param["time_step"]
+    st = param["save_step_r"] 
+    
 else: 
-    raise ValueError(str(loadPath),"not found")
+    raise ValueError(f"Could not load parameters in {loadPath}")
 if rank == 0:
     print(num_slabs)
     # print(len(times))
@@ -272,8 +284,10 @@ bom[:] = rfft(bt,axis = 1)/Ntimes
 eom[:] = 0.5*(np.abs(uom[0])**2 + np.abs(uom[1])**2 + np.abs(uom[2])**2/alph**2 + np.abs(bom)**2)
 
 eplot = np.mean(eom,axis = 0)
-np.save(loadPath/f"e_omega_mean.npy",eplot)
-eplot = np.load(loadPath/f"e_omega_mean.npy")
+np.savez_compressed(loadPath/f"e_omega_mean.npz",eplot = eplot,freqs = freqs)
+if rank ==0 : print(f"Data saved as {loadPath}/e_omega_mean.npz")
+eplot = np.load(loadPath/f"e_omega_mean.npz")["eplot"]
+freqs = np.load(loadPath/f"e_omega_mean.npz")["freqs"]
 plt.figure(figsize=(8, 6))
 plt.ylim(1e-8,5e-2)
 plt.plot(freqs,eplot,'.-')#,markersize = ,color = #,label = )
