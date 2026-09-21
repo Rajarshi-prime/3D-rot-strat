@@ -40,6 +40,7 @@ mpirun -n 4 python 3d_bsnq_MPI_ps.py 0
 Default is `T = 10000` with `dt` on the order of `0.01–0.03`, i.e. hundreds of thousands of steps. Lower `T` in the file before running anything as a quick benchmark.
 ## Benchmarking with and without saving
 Change the following variables to check scaling.
+- `N` : Changes the resolution of the simulation.
 -  `T` : Controls the final time till which the simulation is run. 
     * Change it to `10*dt` to run the code for 10 time-step for example.
 - `dt_save` : Controls the simulation after which the fields are saved. By default it is set to 1.0. 
@@ -71,3 +72,9 @@ or
 ```
  25%|██▌       | 25/100 [00:09<00:28,  2.68s/it]
 ```
+
+### Report the average time taken to run 50steps for the following cases for `3d_bsnq_JAX.py`, and `3d_bsnq_JAX_ps.py`
+1. `N = 360, T = 50*dt, dt_save = 5*dt`
+2. `N = 360, T = 50*dt, dt_save = np.inf`
+3. `N = 540, T = 50*dt, dt_save = 5*dt`
+4. `N = 540, T = 50*dt, dt_save = np.inf`
