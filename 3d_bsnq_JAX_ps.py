@@ -40,7 +40,7 @@ N = 256
 dt = 0.256/N * (2*np.pi)**1.5  #! Such that increasing resolution will decrease the dt
 T = 10000
 dt_save = 1.0
-st = round(dt_save/dt)
+st = round(dt_save/dt) if dt_save != np.inf else np.inf
 f_corr = 1.0
 N_bs = [5,10,15,20]
 N_b = N_bs[idx]
@@ -488,17 +488,22 @@ def evolve_and_save(t,uk,bk):
         semi_G_half =  semi_G**0.5
     else: semi_G = semi_G_half = 1.
 
-    # t3  = time()
+    t3  = time()
     # calc_time = 0
+
     for i in tqdm(range(len(t)-1)):
         # print(ifft2(x_old).std())
         ti = t[i]
-        if i % st ==0 :save(ti,uk,bk)
+        if i % st ==0  and st != np.inf: save(ti,uk,bk)
 
 
         uk,bk = RK4(i,h,ti,uk,bk,semi_G_half,semi_G,hypervisc)
+    time_taken = time()-t3
+    print(f"Average time taken to run {len(t)-1} steps while saving after every after {st} step is: {time_taken/(i+1)}s")
     # field_save(i,t[-1], x_old,cs_old)
     # particle_save(i,t[-1],xprtcl)
+    if st != np.inf:
+        save(t[-1],uk,bk)
 
     # save(t[-1],x_old, cs_old, xprtcl)
 

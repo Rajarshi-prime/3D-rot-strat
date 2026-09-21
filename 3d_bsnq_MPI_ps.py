@@ -33,7 +33,7 @@ N = 256
 dt = 0.256/N * (2*np.pi)**1.5  #! Such that increasing resolution will decrease the dt
 T = 10000
 dt_save = 1.0
-st = round(dt_save/dt)
+st = round(dt_save/dt) if dt_save != np.inf else np.inf
 f_corr = 1.0
 N_bs = [15,20]
 N_b = N_bs[idx]
@@ -576,7 +576,7 @@ def evolve_and_save(t,  u):
         calc_time += time() - t3
         if rank == 0:  print(f"step {i} in time {time() - t3}", end= '\r',file = sys.stderr)
         ## ------------- saving the data -------------------- ##
-        if i % st ==0 :
+        if i % st==0 and st!= np.inf:
         #     save_hdf5(i,uk,bk)
             save(i,uk,bk)
         begin = True   
@@ -640,7 +640,7 @@ def evolve_and_save(t,  u):
         
     ## ---------- Saving the final data ------------
     # save_hdf5(i+1, uk)
-    save(i+1, uk)
+    if st != np.inf : save(i+1, uk)
     if rank ==0: print(f"average calculation time per step {calc_time/(t.size-1)}")
     ## ---------------------------------------------
 
@@ -807,7 +807,8 @@ t1 = time()
 evolve_and_save(t,u)
 t2 = time() - t1 
 # --------------------------------------------------
-if rank ==0: print(t2)
+if rank ==0: 
+    print(f"Time taken to run {len(t) -1} steps while saving after every {st} steps is : {t2/(len(t)-1)}")
 ## --------- saving the calculation time -----------
 if rank ==0: 
     with open(savePath/f"calcTime.txt","a") as f:

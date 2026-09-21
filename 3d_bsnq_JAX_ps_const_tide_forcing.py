@@ -45,7 +45,7 @@ N_bs = [15,20]
 N_b = N_bs[idx]
 T = 100 if not omg_save else 31.4/f_corr
 dt_save = 1.0 if not omg_save else 0.1/f_corr
-st = round(dt_save/dt)
+st = round(dt_save/dt) if dt_save != np.inf else np.inf
 #%%
 fvec = np.array([0.,0.,f_corr])
 N_bvec = np.array([0,0,N_b])

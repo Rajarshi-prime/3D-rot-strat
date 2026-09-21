@@ -1,6 +1,6 @@
 # Running and benchmarking 3D-rot-strat
-Verified by pulling the raw files from the repo (`main` branch). No requirements file exists; dependencies below are inferred from the imports.
-## Setup (my inference, not stated in repo)
+
+## Setup
 ```bash
 git clone https://github.com/Rajarshi-prime/3D-rot-strat
 cd 3D-rot-strat
@@ -9,6 +9,12 @@ pip install numpy scipy sympy tqdm h5py mpi4py jax jaxlib
 - `mpi4py` **is only needed for running CPU codes. Not needed for GPU codes.** `mpi4py` needs a system MPI (e.g. `apt install openmpi-bin libopenmpi-dev`) before `pip install` will work.  
 - `jax`/`jaxlib` need a CUDA build to actually use a GPU; CPU-only `jax` will run but is not what the code is written for (README: "GPU code ... written for single GPU").
 - `h5py` is imported in the MPI scripts but only used in commented-out lines — still required so the import doesn't fail.
+
+## Categories of files
+### CPU codes : 
+`3d_bsnq_MPI.py`, `3d_bsnq_MPI_ps.py`.
+### GPU codes : 
+`3d_bsnq_JAX.py`, `3d_bsnq_JAX_ps.py`, `3d_bsnq_JAX_ps_const_tide_forcing.py`.
 
 ## Running each file
 **3d_bsnq_JAX.py** — no arguments. `idx` (picks `N_b` from `[5,10,15,20]`) hardcoded to `3`.
@@ -31,15 +37,37 @@ mpirun -n 4 python 3d_bsnq_MPI.py 0
 ```bash
 mpirun -n 4 python 3d_bsnq_MPI_ps.py 0
 ```
-Shipped default is `T = 10000` with `dt` on the order of `0.01–0.03`, i.e. hundreds of thousands of steps. Lower `T` in the file before running anything as a quick benchmark.
-## Benchmarking with vs. without saving
-The two families of scripts already handle this differently.
-**MPI.py / MPI_ps.py — no edit needed.** `evolve_and_save` keeps two separate timers:
-- `calc_time`, accumulated only over the RK4/RHS math (save time is excluded), printed at the end as `average calculation time per step`.
-- `t2`, the wall time of the whole run including saving, printed and appended to `data/.../calcTime.txt`.
-One run gives you both: "without saving" = `calc_time/(nsteps-1)`, "with saving" = `t2/(nsteps-1)`.
-**JAX.py / JAX_ps.py / JAX_ps_const_tide_forcing.py — need two runs.** These only compute `t2 = time() - t1` for the whole loop and never print or log it (add `print(t2)` yourself). To isolate save cost, comment out the save call inside `evolve_and_save`:
-```python
-if i % st ==0 :save(ti,uk,bk)   # comment out for the "no saving" run
+Default is `T = 10000` with `dt` on the order of `0.01–0.03`, i.e. hundreds of thousands of steps. Lower `T` in the file before running anything as a quick benchmark.
+## Benchmarking with and without saving
+Change the following variables to check scaling.
+-  `T` : Controls the final time till which the simulation is run. 
+    * Change it to `10*dt` to run the code for 10 time-step for example.
+- `dt_save` : Controls the simulation after which the fields are saved. By default it is set to 1.0. 
+    * Change it to `dt` to save after every time step. 
+    * Change it to `np.inf` to never save during the run.
+
+
+The output of average time-step per simulation is given in the following format at the end of the simulation:
+
 ```
-Run once with this line active and once commented out, same `N`/`T`/`idx`, and compare `t2`.
+Average time taken to run 10 steps while saving after every after 1 step is: 10s
+```
+
+In addition, the CPU and GPU live updates the time taken for each step. 
+
+CPU codes prints the time taken at each step in the error file in the following format:
+```
+...
+step 19 in time 1.833325
+step 20 in time 1.833224
+...
+```
+
+GPU Code live updates the it/s or s/it in the following format: 
+```
+ 25%|██▌       | 25/100 [00:09<00:28,  2.68it/s]
+```
+or 
+```
+ 25%|██▌       | 25/100 [00:09<00:28,  2.68s/it]
+```
